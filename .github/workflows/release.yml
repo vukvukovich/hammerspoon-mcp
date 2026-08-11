@@ -8,8 +8,9 @@ on:
 
 permissions:
   contents: read
-  # npm provenance is signed from the workflow's OIDC identity, so the job needs
-  # permission to mint that token. Without id-token: write, --provenance fails.
+  # Trusted publishing authenticates to npm with this workflow's OIDC identity
+  # instead of a long-lived token, so there is no NPM_TOKEN secret to store,
+  # leak, or rotate. The same identity signs the provenance attestation.
   id-token: write
 
 jobs:
@@ -25,9 +26,17 @@ jobs:
         uses: actions/setup-node@v5
         with:
           node-version: '24'
-          cache: npm
-          # Required so npm writes the auth token for the public registry.
+          # Never cache in a release build: a poisoned or stale cache would end
+          # up inside a published artifact.
+          cache: ''
           registry-url: https://registry.npmjs.org
+
+      # Trusted publishing needs npm 11.5.1 or later and Node 22.14.0 or later.
+      # Printing both makes a version-related 401 obvious instead of mysterious.
+      - name: Report toolchain versions
+        run: |
+          node --version
+          npm --version
 
       - name: Install dependencies
         run: npm ci
@@ -38,11 +47,16 @@ jobs:
       - name: Build
         run: npm run build
 
-      # NPM_TOKEN must exist as a repository secret (an npm automation token with
-      # publish rights) before the first release, otherwise this step 401s.
-      # --access public is required because @vukvukovich/hammerspoon-mcp is a
-      # scoped package and scoped packages default to restricted.
+      # No NODE_AUTH_TOKEN and no --provenance flag.
+      #
+      # The npm CLI detects the OIDC environment and authenticates with it
+      # automatically, and publishing this way generates provenance on its own.
+      # Passing --provenance is unnecessary, and a token would defeat the point.
+      #
+      # This requires a trusted publisher configured on npmjs.com for the
+      # package, pointing at this repository and the workflow filename
+      # "release.yml". Until that exists, this step fails to authenticate.
+      #
+      # --access public stays: scoped packages default to restricted.
       - name: Publish
-        run: npm publish --access public --provenance
-        env:
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+        run: npm publish --access public
