@@ -14,6 +14,7 @@ import { describe, expect, it } from 'vitest';
 import { HammerspoonBridge } from '../../src/bridge/bridge.js';
 import { DocsIndex } from '../../src/docs/docs-index.js';
 import { ALL_TOOLS } from '../../src/tools/index.js';
+import { applyFraction, LAYOUT_PRESETS } from '../../src/tools/safe/layout.js';
 
 const bridge = new HammerspoonBridge();
 const available = bridge.hsPath !== undefined;
@@ -111,6 +112,58 @@ end
 return #out
 `);
     expect(result.ok).toBe(true);
+  });
+
+  /**
+   * Proves the Lua placement matches the TypeScript reference implementation.
+   * They are two copies of the same arithmetic, so without this they could
+   * drift apart silently.
+   *
+   * The window is put back where it started, because a test should not
+   * rearrange someone's desktop.
+   */
+  it('hs_window_layout places a window exactly where applyFraction predicts', async () => {
+    const focused = await bridge.run(`
+local w = hs.window.focusedWindow()
+if not w then return nil end
+local f = w:frame()
+return { id = w:id(), frame = { x = f.x, y = f.y, w = f.w, h = f.h } }
+`);
+    expect(focused.ok).toBe(true);
+    if (!focused.ok || focused.value === undefined || focused.value === null) return;
+
+    const original = focused.value as { id: number; frame: Record<string, number> };
+
+    try {
+      const applied = await runTool('hs_window_layout', {
+        preset: 'left-half',
+        windowId: original.id,
+      });
+      expect(applied.isError).not.toBe(true);
+
+      const text =
+        (applied as unknown as { content?: { text?: string }[] }).content?.[0]?.text ?? '{}';
+      const payload = JSON.parse(text) as {
+        screenFrame: { x: number; y: number; w: number; h: number };
+        frame: { x: number; y: number; w: number; h: number };
+      };
+
+      const predicted = applyFraction(LAYOUT_PRESETS['left-half'], payload.screenFrame);
+      // A window manager rounds to whole pixels and some apps refuse sizes
+      // below their minimum, so compare within a pixel rather than exactly.
+      expect(payload.frame.x).toBeCloseTo(predicted.x, 0);
+      expect(payload.frame.y).toBeCloseTo(predicted.y, 0);
+      expect(payload.frame.w).toBeCloseTo(predicted.w, 0);
+    } finally {
+      await bridge.run(
+        `
+local w = hs.window.get(ARGS.id)
+if w then w:setFrame({ x = ARGS.frame.x, y = ARGS.frame.y, w = ARGS.frame.w, h = ARGS.frame.h }) end
+return true
+`,
+        original
+      );
+    }
   });
 
   it('hs_eval compiles supplied code with load instead of splicing it', async () => {

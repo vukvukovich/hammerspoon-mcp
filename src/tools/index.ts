@@ -1,4 +1,5 @@
 import { apiSearchTool } from './safe/api-search.js';
+import { windowLayoutTool } from './safe/layout.js';
 import { focusAppTool, launchAppTool, listAppsTool } from './safe/apps.js';
 import { healthTool } from './safe/health.js';
 import { consoleTailTool, notifyTool, reloadConfigTool, screensTool } from './safe/system.js';
@@ -17,6 +18,7 @@ export const ALL_TOOLS: readonly RegisterableTool[] = [
   listWindowsTool,
   focusWindowTool,
   moveWindowTool,
+  windowLayoutTool,
   listAppsTool,
   launchAppTool,
   focusAppTool,

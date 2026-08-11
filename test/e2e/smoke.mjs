@@ -115,10 +115,10 @@ try {
 
   if (exposure === 'safe') {
     check('hs_eval is absent at the safe tier', !names.includes('hs_eval'), names.join(', '));
-    check('safe tier exposes 12 tools', tools.length === 12, `got ${tools.length}`);
+    check('safe tier exposes 13 tools', tools.length === 13, `got ${tools.length}`);
   } else {
     check('hs_eval is present when unlocked', names.includes('hs_eval'));
-    check('all tier exposes 13 tools', tools.length === 13, `got ${tools.length}`);
+    check('all tier exposes 14 tools', tools.length === 14, `got ${tools.length}`);
   }
 
   const health = await send('tools/call', { name: 'hs_health', arguments: {} });
