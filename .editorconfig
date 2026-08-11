@@ -1,0 +1,19 @@
+root = true
+
+[*]
+charset = utf-8
+end_of_line = lf
+insert_final_newline = true
+trim_trailing_whitespace = true
+indent_style = space
+indent_size = 2
+
+# Make requires literal tabs in recipe lines.
+[{Makefile,makefile,*.mk}]
+indent_style = tab
+
+# Git hooks are shell scripts; 2 spaces matches the rest of the repo but the
+# section is spelled out because hook files have no extension to match on.
+[.githooks/*]
+indent_style = space
+indent_size = 2

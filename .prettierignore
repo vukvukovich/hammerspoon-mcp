@@ -1,0 +1,16 @@
+# Build output
+dist/
+
+# Test and coverage artefacts
+coverage/
+
+# Dependencies
+node_modules/
+
+# Machine-generated, never hand-edited
+package-lock.json
+*.tsbuildinfo
+*.log
+
+# OS noise
+.DS_Store

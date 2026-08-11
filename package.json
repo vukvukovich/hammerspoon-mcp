@@ -1,0 +1,66 @@
+{
+  "name": "@vukvukovich/hammerspoon-mcp",
+  "version": "0.0.0",
+  "description": "MCP server for Hammerspoon. Injection-safe argument passing, tiered tool permissions, and Hammerspoon API docs search.",
+  "keywords": [
+    "mcp",
+    "modelcontextprotocol",
+    "hammerspoon",
+    "macos",
+    "automation",
+    "lua",
+    "window-management"
+  ],
+  "license": "MIT",
+  "author": "Vuk Vukovich (https://github.com/vukvukovich)",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/vukvukovich/hammerspoon-mcp.git"
+  },
+  "homepage": "https://github.com/vukvukovich/hammerspoon-mcp#readme",
+  "bugs": {
+    "url": "https://github.com/vukvukovich/hammerspoon-mcp/issues"
+  },
+  "type": "module",
+  "engines": {
+    "node": ">=24"
+  },
+  "bin": {
+    "hammerspoon-mcp": "./dist/main.js"
+  },
+  "exports": {
+    ".": "./dist/index.js"
+  },
+  "files": [
+    "dist",
+    "README.md",
+    "LICENSE"
+  ],
+  "scripts": {
+    "build": "tsc -p tsconfig.build.json",
+    "typecheck": "tsc --noEmit",
+    "lint": "eslint .",
+    "lint:fix": "eslint . --fix",
+    "format": "prettier --write .",
+    "format:check": "prettier --check .",
+    "test": "vitest run --project unit",
+    "test:watch": "vitest --project unit",
+    "test:coverage": "vitest run --project unit --coverage",
+    "test:integration": "vitest run --project integration",
+    "check": "npm run typecheck && npm run lint && npm run format:check && npm run test",
+    "prepublishOnly": "npm run build"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/server": "^2.0.0",
+    "zod": "^4.0.0"
+  },
+  "devDependencies": {
+    "@types/node": "^24.0.0",
+    "@vitest/coverage-v8": "^4.1.10",
+    "eslint": "^9.0.0",
+    "prettier": "^3.9.6",
+    "typescript": "^5.9.0",
+    "typescript-eslint": "^8.67.0",
+    "vitest": "^4.1.10"
+  }
+}
