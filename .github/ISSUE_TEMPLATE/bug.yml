@@ -1,0 +1,70 @@
+name: Bug
+description: Something behaves differently than documented
+title: ''
+labels: ['bug']
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Most reports come down to Hammerspoon not running, or `hs.ipc` not being
+        loaded. Please confirm both before filing.
+
+  - type: textarea
+    id: what-happened
+    attributes:
+      label: What happened
+      description: The actual behaviour, including any error text.
+    validations:
+      required: true
+
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected
+      description: What you expected instead.
+    validations:
+      required: true
+
+  - type: textarea
+    id: reproduction
+    attributes:
+      label: Reproduction steps
+      description: Smallest sequence that triggers it. Include the tool call or prompt if relevant.
+      value: |
+        1.
+        2.
+        3.
+    validations:
+      required: true
+
+  - type: textarea
+    id: environment
+    attributes:
+      label: Environment
+      value: |
+        macOS version:
+        Hammerspoon version:
+        Node version:
+        Package version:
+        MCP client (and version):
+    validations:
+      required: true
+
+  - type: textarea
+    id: logs
+    attributes:
+      label: Server logs from stderr
+      description: >-
+        The server writes diagnostics to stderr, never stdout. Paste the relevant
+        lines here. Redact anything private first.
+      render: shell
+    validations:
+      required: false
+
+  - type: checkboxes
+    id: preflight
+    attributes:
+      label: Preflight
+      options:
+        - label: Hammerspoon is running and `hs.ipc` is loaded (`require("hs.ipc")` in the Hammerspoon config).
+          required: true

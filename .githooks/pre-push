@@ -1,0 +1,34 @@
+#!/bin/sh
+# Run the fast half of CI before anything leaves the machine: typecheck, lint,
+# unit tests. Integration tests are deliberately skipped, they need a live
+# Hammerspoon and are slow. Build is skipped too, typecheck already covers it.
+#
+# Enable with: git config core.hooksPath .githooks
+
+set -u
+
+root=$(git rev-parse --show-toplevel 2>/dev/null) || exit 0
+cd "$root" || exit 1
+
+if [ ! -d node_modules ]; then
+  printf 'pre-push: node_modules is missing, skipping checks. Run "npm ci" to enable them.\n' >&2
+  exit 0
+fi
+
+run_step() {
+  label="$1"
+  script="$2"
+  printf '\npre-push: %s\n' "$label" >&2
+  if ! npm run "$script"; then
+    printf '\npre-push: FAILED at "%s" (npm run %s).\n' "$label" "$script" >&2
+    printf 'pre-push: fix it, or use "git push --no-verify" to bypass in an emergency.\n\n' >&2
+    exit 1
+  fi
+}
+
+run_step 'typecheck' 'typecheck'
+run_step 'lint' 'lint'
+run_step 'unit tests' 'test'
+
+printf '\npre-push: all checks passed.\n\n' >&2
+exit 0

@@ -1,0 +1,61 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+# One run per ref. A second push supersedes the first instead of paying for both.
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  check:
+    name: Check (Node ${{ matrix.node }})
+    # Hammerspoon is a macOS GUI application and cannot be installed on any hosted
+    # runner, so the "integration" vitest project is local only and must never run
+    # here. Unit tests mock the subprocess layer and exercise no macOS specific
+    # behaviour, so ubuntu is correct and costs roughly a tenth of a macOS runner.
+    # Do not "fix" this by adding a macOS runner.
+    runs-on: ubuntu-latest
+    strategy:
+      # Keep both legs running so we can tell "broken everywhere" from
+      # "broken on Current only".
+      fail-fast: false
+      matrix:
+        # 24 is Active LTS (the supported floor), 26 is Current and gives early
+        # warning of breakage before it becomes LTS.
+        node: ['24', '26']
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+
+      - name: Set up Node ${{ matrix.node }}
+        uses: actions/setup-node@v5
+        with:
+          node-version: ${{ matrix.node }}
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Typecheck
+        run: npm run typecheck
+
+      - name: Lint
+        run: npm run lint
+
+      - name: Check formatting
+        run: npm run format:check
+
+      - name: Unit tests with coverage
+        run: npm run test:coverage
+
+      - name: Build
+        run: npm run build

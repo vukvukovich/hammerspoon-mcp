@@ -1,0 +1,90 @@
+#!/bin/sh
+# Validate the commit subject against the OpenCommits standard (extended profile).
+#
+#   Type[!] [scope] [scope] description
+#
+# No colons, no parentheses, no brackets. Only the first line is checked; the
+# body is free form. POSIX sh and grep -Eq only, so there is nothing to install.
+# The regex below is the one published in CONTRIBUTING.md, keep the two in step.
+#
+# Enable with: git config core.hooksPath .githooks
+
+set -u
+
+msg_file="${1:-}"
+[ -n "$msg_file" ] && [ -f "$msg_file" ] || exit 0
+
+# The subject is the first line that is neither a git comment nor blank. An
+# entirely empty message is left alone so git can abort the commit itself.
+subject=$(grep -v '^#' "$msg_file" | grep -v '^[[:space:]]*$' | head -n 1)
+[ -n "$subject" ] || exit 0
+
+# Machine generated subjects are not ours to police.
+case "$subject" in
+  'Merge '* | 'Revert '* | 'fixup!'* | 'squash!'*) exit 0 ;;
+esac
+
+types='Add|Fix|Ref|Opt|Rmv|Doc|Tst|Sty|Chr|Mov|Rnm|Dep|Sec|Cfg|Rev'
+pattern="^($types)(!)?( [a-z][a-z0-9]*){0,2} [a-z].+$"
+
+# A trailing period slips past the regex, so it gets its own check.
+problem=''
+if ! printf '%s\n' "$subject" | grep -Eq "$pattern"; then
+  problem='it does not match the required grammar'
+elif printf '%s\n' "$subject" | grep -Eq '\.$'; then
+  problem='it ends with a period'
+fi
+
+[ -n "$problem" ] || exit 0
+
+printf '\n  Commit rejected: %s.\n\n' "$problem" >&2
+printf '  Your subject:  %s\n\n' "$subject" >&2
+
+cat >&2 <<'EOF'
+  Expected:      Type[!] [scope] [scope] description
+
+    Type         one of the types below, capitalised exactly as shown
+    !            optional, marks a breaking change
+    scope        zero to two lowercase words, no punctuation
+    description  imperative, starts lowercase, no trailing period
+
+  Types:
+
+    Add   new features and user-facing capabilities
+    Fix   bug fixes
+    Ref   internal restructuring with no behaviour change
+    Opt   performance improvements
+    Rmv   removing something
+    Doc   documentation and comments
+    Tst   tests
+    Sty   cosmetic only, no logic touched
+    Chr   ci/cd, tooling, dependencies, infrastructure
+    Mov   relocating a file or module, contents unchanged
+    Rnm   renames
+    Dep   deprecating something that still works
+    Sec   security-relevant changes
+    Cfg   configuration-only changes
+    Rev   reverting an earlier commit
+
+  Scopes used here: bridge, tools, server, docs, ci, deps, test
+
+  Good examples:
+
+    Add bridge argument codec
+    Fix! server tool registration order
+    Tst tools guard against unsafe calls
+    Chr deps bump vitest to 4.1
+
+  Bad examples:
+
+    feat: add codec        colons and lowercase types are not used
+    Add Bridge Codec       description must start lowercase
+    Fix bridge codec.      no trailing period
+
+  Full spec:     CONTRIBUTING.md, section "Commit messages"
+  Retry with:    git commit --amend
+  Bypass with:   git commit --no-verify   (emergencies only)
+
+EOF
+
+exit 1

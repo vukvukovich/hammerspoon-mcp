@@ -1,0 +1,28 @@
+version: 2
+
+updates:
+  - package-ecosystem: npm
+    directory: '/'
+    target-branch: main
+    schedule:
+      interval: weekly
+    # "Chr" keeps generated subjects inside the OpenCommits grammar enforced by
+    # .githooks/commit-msg.
+    commit-message:
+      prefix: 'Chr'
+    # One PR for all the noise, separate PRs for majors which need a real look.
+    groups:
+      npm-minor-and-patch:
+        patterns:
+          - '*'
+        update-types:
+          - minor
+          - patch
+
+  - package-ecosystem: github-actions
+    directory: '/'
+    target-branch: main
+    schedule:
+      interval: weekly
+    commit-message:
+      prefix: 'Chr'

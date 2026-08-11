@@ -1,0 +1,85 @@
+name: Task
+description: A unit of planned work
+title: ''
+labels: ['task']
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Write the issue title the way you would write an OpenCommits commit
+        subject: `Type [scope] description`, imperative, lowercase description,
+        no trailing period. For example `Add bridge argument codec` or
+        `Fix server tool registration order`.
+
+  - type: textarea
+    id: context
+    attributes:
+      label: Context
+      description: Why does this exist, and what depends on it?
+      placeholder: What problem or dependency makes this worth doing now.
+    validations:
+      required: true
+
+  - type: textarea
+    id: goal
+    attributes:
+      label: Goal
+      description: The single outcome, in one or two sentences.
+    validations:
+      required: true
+
+  - type: textarea
+    id: acceptance-criteria
+    attributes:
+      label: Acceptance criteria
+      description: A checklist. Each item must be objectively checkable.
+      value: |
+        - [ ]
+    validations:
+      required: true
+
+  - type: textarea
+    id: out-of-scope
+    attributes:
+      label: Out of scope
+      description: What this deliberately does not do. Keeps the ticket from growing.
+    validations:
+      required: false
+
+  - type: textarea
+    id: test-plan
+    attributes:
+      label: Test plan
+      description: >-
+        Which unit tests cover this, and whether integration coverage is needed.
+        Integration tests need a live Hammerspoon and run locally only.
+    validations:
+      required: true
+
+  - type: dropdown
+    id: chunk
+    attributes:
+      label: Chunk
+      description: Which part of the system this belongs to.
+      options:
+        - bridge
+        - tools-safe
+        - tools-unsafe
+        - server
+        - registry
+        - docs
+        - ci
+        - release
+    validations:
+      required: true
+
+  - type: dropdown
+    id: size
+    attributes:
+      label: Size
+      options:
+        - S (under an hour)
+        - M (half a day)
+        - L (a day or more)
+    validations:
+      required: true

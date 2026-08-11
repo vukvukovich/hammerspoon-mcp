@@ -1,0 +1,48 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*.*.*'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  # npm provenance is signed from the workflow's OIDC identity, so the job needs
+  # permission to mint that token. Without id-token: write, --provenance fails.
+  id-token: write
+
+jobs:
+  publish:
+    name: Publish to npm
+    # Same reasoning as ci.yml: nothing in the build or the checks needs macOS.
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+
+      - name: Set up Node 24
+        uses: actions/setup-node@v5
+        with:
+          node-version: '24'
+          cache: npm
+          # Required so npm writes the auth token for the public registry.
+          registry-url: https://registry.npmjs.org
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Check
+        run: npm run check
+
+      - name: Build
+        run: npm run build
+
+      # NPM_TOKEN must exist as a repository secret (an npm automation token with
+      # publish rights) before the first release, otherwise this step 401s.
+      # --access public is required because @vukvukovich/hammerspoon-mcp is a
+      # scoped package and scoped packages default to restricted.
+      - name: Publish
+        run: npm publish --access public --provenance
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
