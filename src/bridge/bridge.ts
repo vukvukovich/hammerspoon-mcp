@@ -7,6 +7,7 @@
  */
 
 import { spawn } from 'node:child_process';
+import { StringDecoder } from 'node:string_decoder';
 
 import { buildProgram, encodeArgs, envelopeToResult, parseEnvelope } from './codec.js';
 import {
@@ -84,6 +85,19 @@ export const spawnExec: ExecFn = async (file, args, options) =>
   new Promise<ExecResult>((resolve, reject) => {
     const child = spawn(file, [...args], { stdio: ['ignore', 'pipe', 'pipe'] });
 
+    // A pipe delivers bytes, not characters, so a multi-byte UTF-8 sequence
+    // can be split across two chunks. Calling chunk.toString('utf8') on each
+    // chunk decodes each half on its own and yields replacement characters:
+    // verified on a real pipe, where "ok 🚀 done" arrives as "ok ???? done".
+    // StringDecoder holds an incomplete sequence back until the rest arrives.
+    //
+    // This matters beyond cosmetics. Window titles and console lines contain
+    // emoji and accents routinely, and a corrupted byte inside the JSON
+    // envelope makes the whole result unparseable, turning a working call into
+    // a ProtocolError.
+    const outDecoder = new StringDecoder('utf8');
+    const errDecoder = new StringDecoder('utf8');
+
     let stdout = '';
     let stderr = '';
     let settled = false;
@@ -103,7 +117,7 @@ export const spawnExec: ExecFn = async (file, args, options) =>
     };
 
     child.stdout.on('data', (chunk: Buffer) => {
-      stdout += chunk.toString('utf8');
+      stdout += outDecoder.write(chunk);
       if (stdout.length > options.maxBuffer) {
         overflowed = true;
         child.kill('SIGTERM');
@@ -111,7 +125,7 @@ export const spawnExec: ExecFn = async (file, args, options) =>
     });
 
     child.stderr.on('data', (chunk: Buffer) => {
-      stderr += chunk.toString('utf8');
+      stderr += errDecoder.write(chunk);
     });
 
     // Spawn failures (a missing binary, most importantly) arrive here rather
@@ -124,6 +138,12 @@ export const spawnExec: ExecFn = async (file, args, options) =>
 
     child.on('close', (code, signal) => {
       settle(() => {
+        // Flush whatever the decoders were holding. A process killed mid
+        // character leaves a partial sequence, and end() turns it into the
+        // replacement character rather than dropping it silently.
+        stdout += outDecoder.end();
+        stderr += errDecoder.end();
+
         if (overflowed) {
           reject(new Error(`Output exceeded ${String(options.maxBuffer)} bytes.`));
           return;

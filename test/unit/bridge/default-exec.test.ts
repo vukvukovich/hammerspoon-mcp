@@ -77,6 +77,30 @@ describe('the real subprocess path', () => {
     expect(result.stderr).toBe('');
   });
 
+  // A pipe splits on byte boundaries, so a multi-byte character can land half
+  // in one chunk and half in the next. Decoding each chunk on its own turns it
+  // into replacement characters, which for this server means a corrupted JSON
+  // envelope and a bogus ProtocolError. The child below writes one byte at a
+  // time to force the split deterministically.
+  it('reassembles multi-byte characters split across chunk boundaries', async () => {
+    const payload = 'ok 🚀 café done';
+    const script = `
+const b = Buffer.from(${JSON.stringify(payload)}, 'utf8');
+let i = 0;
+const tick = () => {
+  if (i < b.length) { process.stdout.write(b.subarray(i, i + 1)); i += 1; setTimeout(tick, 1); }
+};
+tick();
+`;
+    const result = await spawnExec(process.execPath, ['-e', script], {
+      timeout: 15_000,
+      maxBuffer: 1024 * 1024,
+    });
+
+    expect(result.stdout).toBe(payload);
+    expect(result.stdout).not.toContain('�');
+  });
+
   it('captures stderr separately from stdout', async () => {
     const result = await spawnExec(process.execPath, ['-e', 'console.error("warned")'], {
       timeout: 5000,
