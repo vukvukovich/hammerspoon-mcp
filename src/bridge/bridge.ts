@@ -75,8 +75,12 @@ export type RunOptions = {
  * 16ms with stdin closed, versus a full timeout without. spawn is used instead
  * of execFile because it lets stdin be set to 'ignore' up front rather than
  * closed as an afterthought.
+ *
+ * Exported so tests can drive it with an arbitrary argv. The bridge itself
+ * always sends ['-c', program], which is too rigid to exercise the timeout and
+ * output-limit paths.
  */
-const defaultExec: ExecFn = async (file, args, options) =>
+export const spawnExec: ExecFn = async (file, args, options) =>
   new Promise<ExecResult>((resolve, reject) => {
     const child = spawn(file, [...args], { stdio: ['ignore', 'pipe', 'pipe'] });
 
@@ -157,7 +161,7 @@ export class HammerspoonBridge {
   readonly #lookup: HsPathLookup;
 
   constructor(options: BridgeOptions = {}) {
-    this.#exec = options.exec ?? defaultExec;
+    this.#exec = options.exec ?? spawnExec;
     this.#defaultTimeoutMs = options.defaultTimeoutMs ?? DEFAULT_TIMEOUT_MS;
     this.#lookup = resolveHsPath({
       override: options.hsPathOverride,

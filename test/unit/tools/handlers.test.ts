@@ -1,0 +1,138 @@
+/**
+ * Exercises every tool handler against a fake bridge.
+ *
+ * This is where the Lua constants and argument plumbing get checked without a
+ * real Hammerspoon: the fake records what the tool asked for, so a test can
+ * assert that the right program ran with the right arguments.
+ */
+
+import { describe, expect, it, vi } from 'vitest';
+
+import type { HammerspoonBridge } from '../../../src/bridge/bridge.js';
+import type { BridgeResult } from '../../../src/bridge/errors.js';
+import { ALL_TOOLS } from '../../../src/tools/index.js';
+import type { ToolContext } from '../../../src/tools/registry.js';
+
+type CapturedCall = { lua: string; args: unknown; options: unknown };
+type ToolResult = { content: { type: string; text: string }[]; isError?: boolean };
+
+function fakeBridge(result: BridgeResult<unknown>): {
+  bridge: HammerspoonBridge;
+  calls: CapturedCall[];
+} {
+  const calls: CapturedCall[] = [];
+  const bridge = {
+    hsPath: '/fake/hs',
+    run: vi.fn(async (lua: string, args?: unknown, options?: unknown) => {
+      calls.push({ lua, args, options });
+      return Promise.resolve(result);
+    }),
+  };
+  return { bridge: bridge as unknown as HammerspoonBridge, calls };
+}
+
+/** Pulls the handler back out of a tool by registering it against a stub server. */
+function handlerFor(name: string, context: ToolContext) {
+  const tool = ALL_TOOLS.find((candidate) => candidate.name === name);
+  if (tool === undefined) throw new Error(`no tool named ${name}`);
+
+  let captured: ((args: unknown, ctx: unknown) => Promise<ToolResult>) | undefined;
+  const server = {
+    registerTool: (
+      _name: string,
+      _config: unknown,
+      handler: (args: unknown, ctx: unknown) => Promise<ToolResult>
+    ) => {
+      captured = handler;
+    },
+  };
+  tool.register(server as never, context);
+
+  if (captured === undefined) throw new Error(`${name} did not register a handler`);
+  return captured;
+}
+
+const SUCCESS: BridgeResult<unknown> = { ok: true, value: { fine: true } };
+
+describe('every tool', () => {
+  it.each(ALL_TOOLS.map((tool) => tool.name))('%s runs a static Lua program', async (name) => {
+    const { bridge, calls } = fakeBridge(SUCCESS);
+    const handler = handlerFor(name, { bridge });
+
+    // Arguments that satisfy every schema in the set.
+    await handler(
+      { id: 1, text: 'hi', name: 'Safari', code: 'return 1', lines: 5, timeoutMs: 1000 },
+      {}
+    );
+
+    expect(calls).toHaveLength(1);
+    const lua = calls[0]?.lua ?? '';
+    expect(lua.length).toBeGreaterThan(0);
+    // The program must be a fixed constant, so no argument value may appear in it.
+    expect(lua).not.toContain('Safari');
+    expect(lua).not.toContain('return 1\n');
+  });
+
+  it.each(ALL_TOOLS.map((tool) => tool.name))(
+    '%s surfaces a bridge failure as an error result with a hint',
+    async (name) => {
+      const failure: BridgeResult<unknown> = {
+        ok: false,
+        error: {
+          kind: 'HsNotRunning',
+          message: 'Hammerspoon is not running.',
+          hint: 'Open Hammerspoon and load hs.ipc.',
+        },
+      };
+      const { bridge } = fakeBridge(failure);
+      const result = await handlerFor(name, { bridge })(
+        { id: 1, text: 'hi', name: 'Safari', code: 'return 1', lines: 5, timeoutMs: 1000 },
+        {}
+      );
+
+      expect(result.isError).toBe(true);
+      expect(result.content[0]?.text).toContain('HsNotRunning');
+      expect(result.content[0]?.text).toContain('Open Hammerspoon');
+    }
+  );
+});
+
+describe('argument routing', () => {
+  it('hs_list_windows forwards its filter to the Lua side', async () => {
+    const { bridge, calls } = fakeBridge(SUCCESS);
+    await handlerFor('hs_list_windows', { bridge })({ app: 'Ghostty' }, {});
+    expect(calls[0]?.args).toMatchObject({ app: 'Ghostty' });
+  });
+
+  it('hs_move_window forwards only the coordinates it was given', async () => {
+    const { bridge, calls } = fakeBridge(SUCCESS);
+    await handlerFor('hs_move_window', { bridge })({ id: 7, x: 100, width: 640 }, {});
+    expect(calls[0]?.args).toMatchObject({ id: 7, x: 100, width: 640 });
+  });
+
+  it('hs_eval sends only the code, and applies the caller timeout', async () => {
+    const { bridge, calls } = fakeBridge(SUCCESS);
+    await handlerFor('hs_eval', { bridge })({ code: 'return 42', timeoutMs: 2500 }, {});
+
+    // The timeout is transport configuration, not something Lua should see.
+    expect(calls[0]?.args).toEqual({ code: 'return 42' });
+    expect(calls[0]?.options).toMatchObject({ timeoutMs: 2500 });
+    // The code must travel as an argument, never inside the program text.
+    expect(calls[0]?.lua).not.toContain('return 42');
+    expect(calls[0]?.lua).toContain('load(ARGS.code');
+  });
+
+  it('hs_health annotates the result with the resolved binary path', async () => {
+    const { bridge } = fakeBridge({ ok: true, value: { hammerspoonVersion: '1.0.0' } });
+    const result = await handlerFor('hs_health', { bridge })({}, {});
+    expect(result.content[0]?.text).toContain('/fake/hs');
+    expect(result.content[0]?.text).toContain('1.0.0');
+  });
+
+  it('hs_reload_config explains the consequences instead of echoing raw output', async () => {
+    const { bridge } = fakeBridge({ ok: true, value: { scheduled: true } });
+    const result = await handlerFor('hs_reload_config', { bridge })({}, {});
+    expect(result.isError).not.toBe(true);
+    expect(result.content[0]?.text).toContain('hs.ipc');
+  });
+});
