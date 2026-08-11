@@ -1,0 +1,57 @@
+name: MCP Registry
+
+# Publishes server.json to the official MCP registry, which is how anyone
+# browsing for MCP servers finds this one. Kept separate from release.yml so a
+# registry hiccup cannot fail an npm publish that already succeeded, and so it
+# can be re-run on its own.
+on:
+  release:
+    types: [published]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  # The registry authenticates GitHub Actions over OIDC, the same way npm does.
+  # The io.github.vukvukovich/* namespace is claimed by proving this workflow
+  # runs in that account's repository, so no token or secret is involved.
+  id-token: write
+
+jobs:
+  publish:
+    name: Publish to MCP registry
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+
+      # Pinned rather than "latest" so a publisher release cannot silently
+      # change behaviour here. Bump deliberately.
+      - name: Install mcp-publisher
+        env:
+          PUBLISHER_VERSION: v1.8.1
+        run: |
+          curl -fsSL -o publisher.tar.gz \
+            "https://github.com/modelcontextprotocol/registry/releases/download/${PUBLISHER_VERSION}/mcp-publisher_linux_amd64.tar.gz"
+          tar -xzf publisher.tar.gz mcp-publisher
+          chmod +x mcp-publisher
+          ./mcp-publisher --version
+
+      # server.json declares the version independently of package.json, and a
+      # mismatch publishes a registry entry pointing at a package version that
+      # does not exist. Cheaper to catch here than to explain later.
+      - name: Check server.json matches package.json
+        run: |
+          pkg="$(node -p "require('./package.json').version")"
+          srv="$(node -p "require('./server.json').version")"
+          inner="$(node -p "require('./server.json').packages[0].version")"
+          echo "package.json=$pkg server.json=$srv packages[0]=$inner"
+          if [ "$pkg" != "$srv" ] || [ "$pkg" != "$inner" ]; then
+            echo "::error::Version mismatch between package.json and server.json"
+            exit 1
+          fi
+
+      - name: Authenticate
+        run: ./mcp-publisher login github-oidc
+
+      - name: Publish
+        run: ./mcp-publisher publish
