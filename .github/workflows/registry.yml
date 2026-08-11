@@ -50,6 +50,15 @@ jobs:
             exit 1
           fi
 
+      # The registry caps description at 100 characters and rejects the whole
+      # publish with a 422 if it is longer. Checking here names the problem
+      # instead of burying it in an API error.
+      - name: Check description length
+        run: |
+          len="$(node -p "require('./server.json').description.length")"
+          echo "description length: $len (limit 100)"
+          test "$len" -le 100 || { echo "::error::server.json description exceeds 100 characters"; exit 1; }
+
       - name: Authenticate
         run: ./mcp-publisher login github-oidc
 
