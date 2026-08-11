@@ -1,0 +1,44 @@
+{
+  "$schema": "https://static.modelcontextprotocol.io/schemas/2025-12-11/server.schema.json",
+  "name": "io.github.vukvukovich/hammerspoon-mcp",
+  "description": "Control macOS through Hammerspoon. Injection-safe argument passing, tiered tool permissions, and search over the Hammerspoon API reference.",
+  "repository": {
+    "url": "https://github.com/vukvukovich/hammerspoon-mcp",
+    "source": "github"
+  },
+  "version": "0.1.0",
+  "packages": [
+    {
+      "registryType": "npm",
+      "identifier": "@vukvukovich/hammerspoon-mcp",
+      "version": "0.1.0",
+      "transport": {
+        "type": "stdio"
+      },
+      "environmentVariables": [
+        {
+          "name": "HS_MCP_TOOLS",
+          "description": "Which tools to expose. \"safe\" (default) exposes inspection and window management only. \"all\" additionally exposes hs_eval, which runs arbitrary Lua and can do anything the user can do.",
+          "isRequired": false,
+          "default": "safe"
+        },
+        {
+          "name": "HS_MCP_HS_PATH",
+          "description": "Explicit path to the Hammerspoon hs command line tool. Only needed when Hammerspoon is installed somewhere unusual.",
+          "isRequired": false
+        },
+        {
+          "name": "HS_MCP_DOCS_PATH",
+          "description": "Explicit path to Hammerspoon's bundled docs.json, used by hs_api_search.",
+          "isRequired": false
+        },
+        {
+          "name": "HS_MCP_LOG_LEVEL",
+          "description": "Log verbosity on stderr: debug, info (default), warn, or error.",
+          "isRequired": false,
+          "default": "info"
+        }
+      ]
+    }
+  ]
+}
