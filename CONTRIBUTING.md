@@ -226,9 +226,17 @@ profile, meaning core types plus the extended ones above):
 ^(Add|Fix|Ref|Opt|Rmv|Doc|Tst|Sty|Chr|Mov|Rnm|Dep|Sec|Cfg|Rev)(!)?( [a-z][a-z0-9]*){0,2} [a-z].+$
 ```
 
-Enable it once per clone with `git config core.hooksPath .githooks`. CI checks
-the same pattern on pull request commits, so skipping the hook only moves the
-failure later.
+Enable it once per clone with `git config core.hooksPath .githooks`. Git does
+not pick up repository hooks on its own, so this is the one setup step that is
+easy to forget.
+
+CI runs the same check on pull requests, in a dedicated `commit-messages` job
+that validates every subject in the merge-base range. It mirrors the hook line
+for line, so the two never disagree, and skipping the hook locally only moves
+the failure later. Commits authored by Dependabot are skipped by author,
+because Dependabot renders its configured `Chr` prefix as `Chr:` with a colon,
+which the grammar rejects. Skipping by author rather than relaxing the pattern
+keeps the rule identical for anything a human writes.
 
 ### Examples
 

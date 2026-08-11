@@ -30,26 +30,36 @@ Hammerspoon can hang.
 MCP client (Claude Code, Claude Desktop, ...)
         |  JSON-RPC over stdio
         v
-+-------------------------------------------+
-|  main.ts        process entry, signals    |
-+-------------------------------------------+
-|  server.ts      MCP server, transport     |
-+-------------------------------------------+
-|  tools/registry.ts   tier filter, specs   |
-+-------------------------------------------+
-|  tools/safe/*, tools/unsafe/eval.ts       |
-|                 schema + static Lua body  |
-+-------------------------------------------+
-|  bridge/        codec, path, exec, errors |
-+-------------------------------------------+
-        |  execFile(hsPath, ["-c", lua])
++-----------------------------------------------+
+|  main.ts        bin entry, serveStdio,        |
+|                 signal handling               |
++-----------------------------------------------+
+|  server.ts      builds the McpServer,         |
+|                 filters tools by tier         |
++-----------------------------------------------+
+|  tools/registry.ts   defineTool, result       |
+|                      helpers                  |
++-----------------------------------------------+
+|  tools/safe/*, tools/unsafe/eval.ts           |
+|                 Zod schema + static Lua body  |
++-----------------------------------------------+
+|  bridge/        codec, path, spawn, errors    |
++-----------------------------------------------+
+        |  spawn(hsPath, ["-c", lua],
+        |        { stdio: ["ignore", "pipe", "pipe"] })
         v
    hs CLI  --->  Hammerspoon.app (Lua runtime)
 ```
 
-Each layer only knows the one below it. Tools do not know about `execFile`. The
-bridge does not know what MCP is. That separation is what makes the bridge
-testable against fixtures with no Hammerspoon in the room.
+Each layer only knows the one below it. Tools do not know how the subprocess is
+started. The bridge does not know what MCP is. That separation is what makes the
+bridge testable with no Hammerspoon in the room: a test injects its own `exec`
+function through `BridgeOptions` and nothing else changes.
+
+One tool sits outside this stack. `hs_api_search` reads Hammerspoon's bundled
+`docs.json` through `src/docs/docs-index.ts` and never calls the bridge, so it
+answers even when Hammerspoon is not running. See
+[API documentation search](#api-documentation-search).
 
 ### The request path
 
@@ -58,17 +68,17 @@ sequenceDiagram
     participant C as MCP client
     participant S as server.ts
     participant R as registry.ts
-    participant T as tool spec
+    participant T as tool definition
     participant B as bridge.ts
     participant H as hs CLI
     participant A as Hammerspoon
 
-    C->>S: tools/call hs_move_window {windowId, unit}
-    S->>R: look up registered tool
+    C->>S: tools/call hs_move_window {id, x, y, width, height}
+    S->>R: dispatch to the registered handler
     R->>T: validate args with Zod schema
-    T->>B: run(MOVE_WINDOW_LUA, args, timeoutMs)
+    T->>B: run(MOVE_WINDOW_LUA, args)
     B->>B: JSON.stringify -> base64 -> prelude
-    B->>H: execFile(hsPath, ["-c", prelude + body])
+    B->>H: spawn(hsPath, ["-c", prelude + body])
     H->>A: send Lua over hs.ipc
     A->>A: pcall(tool body), read ARGS.*
     A-->>H: one JSON line {ok:true,value:...}
@@ -112,11 +122,37 @@ args object  ->  JSON.stringify  ->  Buffer.from(json).toString("base64")
 The base64 text is spliced into exactly one place, a fixed prelude line:
 
 ```lua
-local ARGS = hs.json.decode(hs.base64.decode("PGJhc2U2ND4="))
+local ARGS = hs.json.decode(hs.base64.decode("PGJhc2U2ND4=")) or {}
 ```
 
 The full program sent to `hs` is that prelude, plus a `pcall` wrapper, plus the
-static body. The body reads `ARGS.windowId`, `ARGS.unit`, and so on.
+static body. The body reads `ARGS.id`, `ARGS.width`, and so on. The `or {}` means
+a tool that takes no arguments still sees a table rather than `nil`.
+
+### The invariant has no exceptions
+
+No tool in this codebase builds Lua by string concatenation. Not one, and that
+includes `hs_eval`.
+
+`hs_eval` is the tool that runs code the caller supplied, so it looks like the
+obvious place to give up and splice. It does not. The supplied code travels
+through the same base64 `ARGS` channel as every other argument, and the static
+body compiles it inside Lua:
+
+```lua
+local chunk, compileError = load(ARGS.code, "hs_eval", "t")
+if not chunk then error("syntax error: " .. tostring(compileError), 0) end
+return chunk()
+```
+
+That buys two things. The codec invariant stays absolute, so "does any tool
+splice?" has a one-word answer instead of a list of exceptions to audit. And a
+syntax error in the supplied code becomes a clean `LuaError` naming `hs_eval`,
+instead of a mangled program whose parse failure lands somewhere unrelated.
+
+The security boundary for `hs_eval` is the tier, not the encoding. Arbitrary Lua
+can do anything the user can do. Encoding it safely just means the failure modes
+are the ones you asked for.
 
 ### Why base64 makes injection impossible
 
@@ -158,79 +194,111 @@ Two supporting details:
 
 ### No shell layer
 
-Invocation is `execFile(hsPath, ["-c", lua])`. `execFile` takes an argv array
-and hands it straight to the OS. There is no `sh -c`, so there is no second
-quoting context to get right. Using `exec` with a command string would put the
-shell back in the path and undo the whole design, which is why
+Invocation is `spawn(hsPath, ["-c", lua], ...)`. `spawn` takes an argv array and
+hands it straight to the operating system. There is no `sh -c`, so there is no
+second quoting context to get right. Using `exec` with a command string would
+put the shell back in the path and undo the whole design, which is why
 [CONVENTIONS.md](../CONVENTIONS.md) bans it outright.
 
 ### The regression guard
 
-A meta-test in `test/unit/` reads the source of every file under `src/tools/`,
-finds each `*_LUA` constant, and fails if any of them contains a
-template-literal interpolation (`${`). It is a blunt check and that is fine. Its
-job is to make the day someone reintroduces splicing a red CI run rather than a
-CVE.
+`test/unit/tools/lua-safety.test.ts` is a meta-test. It reads the source of
+every `.ts` file under `src/` and fails the build on four things:
+
+1. **No Lua constant exists at all.** If the pattern below stops matching
+   anything, the test is silently passing on nothing, so it asserts that it
+   found some.
+2. **A `*_LUA` constant contains `${`.** That is a template-literal
+   interpolation, which means a value is being spliced into Lua source.
+3. **A `*_LUA` constant is declared indented.** Indentation means the constant
+   sits inside a function, which means it is rebuilt on every call and could
+   capture a local. Module-level declaration is what makes "static" checkable by
+   grep. The check matches `\n[ \t]+const ..._LUA` specifically, because `\s+`
+   would span newlines and flag a top-level constant that merely has a blank
+   line above it.
+4. **`bridge.run` is called with anything other than an identifier ending in
+   `LUA`.** A template literal, a concatenation, or a function call in that
+   position is a splicing risk even when every named constant is clean.
+
+These are blunt textual checks and that is fine. Their job is to make the day
+someone reintroduces splicing a red CI run rather than a CVE. They also explain
+the naming rule: the `_LUA` suffix is not decoration, it is what the scanner
+matches on.
 
 ## Binary discovery
 
 `src/bridge/hs-path.ts`.
 
 The `hs` binary lands in different places depending on how Hammerspoon was
-installed and which Homebrew prefix the machine uses. The server tries, in
-order, and takes the first path that exists and is executable:
+installed and which Homebrew prefix the machine uses. The server takes the first
+path that exists:
 
-1. `$HS_MCP_HS_PATH`, if set.
+1. `$HS_MCP_HS_PATH`, if set. Short-circuits everything below.
 2. `~/.local/bin/hs` (the usual target of `hs.ipc.cliInstall()`)
 3. `/opt/homebrew/bin/hs` (Homebrew on Apple Silicon)
 4. `/usr/local/bin/hs` (Homebrew on Intel, or a manual install)
 5. `/Applications/Hammerspoon.app/Contents/Frameworks/hs/hs` (inside the bundle)
 6. `~/Applications/Hammerspoon.app/Contents/Frameworks/hs/hs` (per-user install)
-7. bare `hs`, resolved from `PATH`
 
-An explicit `HS_MCP_HS_PATH` is trusted without probing. If the user named a
-binary, a clear failure at execution time is better than quietly running a
-different one.
+The check is existence only (`existsSync`), not an executable-bit test. A path
+that exists but cannot be run fails later as a spawn error, which the classifier
+turns into `HsNotFound`.
 
-The known locations come before `PATH` on purpose. An MCP server is spawned by a
-GUI application, and GUI applications on macOS inherit a minimal environment
-that usually does not include Homebrew's `bin`. A path that works in your
-terminal often does not work for the server. Probing the known locations first
-means the common install works with no configuration, and `HS_MCP_HS_PATH`
-covers the rest.
+An explicit `HS_MCP_HS_PATH` is trusted without probing the filesystem at all.
+If the user named a binary, a clear failure at execution time is better than
+quietly running a different one.
+
+There is deliberately no `PATH` lookup. An MCP server is spawned by a graphical
+application, and graphical applications on macOS inherit a minimal environment
+that usually does not include Homebrew's `bin`. A bare `hs` that resolves in
+your terminal often does not resolve for the server, so relying on `PATH` would
+work on the developer's machine and fail on the user's. The absolute locations
+above cover every normal install, and `HS_MCP_HS_PATH` covers the rest.
 
 When nothing matches, the lookup returns the full list of paths it searched, and
 that list goes into the `HsNotFound` hint. "Not found" is not actionable. "Not
-found, here are the six places I looked" is.
+found, here is every place I looked" is.
 
-Resolution runs once and the result is cached for the life of the process.
+Resolution runs once, in the `HammerspoonBridge` constructor. The server builds
+one bridge, so in practice that is once per process.
 
 ## The result protocol
 
-Every tool's Lua returns exactly one JSON line on stdout, produced under
-`pcall`:
+Every tool's Lua produces exactly one JSON line on stdout. `buildProgram` in
+`src/bridge/codec.ts` wraps the static body to guarantee it:
 
 ```lua
-local ARGS = hs.json.decode(hs.base64.decode("<base64>"))
-
-local ok, result = pcall(function()
+local ARGS = hs.json.decode(hs.base64.decode("<base64>")) or {}
+local __ok, __res = pcall(function()
   -- static tool body, reads ARGS.*
   return { count = 3 }
 end)
-
-if ok then
-  print(hs.json.encode({ ok = true, value = result }))
-else
-  print(hs.json.encode({ ok = false, err = tostring(result) }))
+if not __ok then
+  return hs.json.encode({ ok = false, err = tostring(__res) })
 end
+local __encoded, __json = pcall(hs.json.encode, { ok = true, value = __res })
+if __encoded then return __json end
+return hs.json.encode({ ok = true, value = tostring(__res), unencodable = true })
 ```
 
-So the wire format is one of two shapes:
+The program `return`s the JSON string rather than printing it. The `hs` CLI
+prints whatever the program returns, so this stays one line and one line only.
+
+The locals are `__` prefixed so a tool body can declare `ok`, `res`, or `json`
+without colliding with the wrapper.
+
+So the wire format is one of three shapes:
 
 ```json
 { "ok": true, "value": { "count": 3 } }
 { "ok": false, "err": "attempt to index a nil value" }
+{ "ok": true, "value": "hs.window: Safari", "unencodable": true }
 ```
+
+The third one exists because some Hammerspoon values cannot be JSON-encoded at
+all. A cyclic table, or a userdata handle, makes `hs.json.encode` throw. Losing
+the whole call to that is worse than handing back `tostring(value)` and a flag
+saying so, so the encode itself runs under a second `pcall`.
 
 `pcall` is what keeps a Lua runtime error from becoming a process-level failure
 with no diagnosis. A crashed tool still returns a structured `err` the agent can
@@ -263,12 +331,40 @@ If no line parses, that is a `ProtocolError`, described below.
 
 1. Resolve the `hs` path (cached).
 2. Encode args, assemble prelude plus body.
-3. `execFile(hsPath, ["-c", lua], { timeout, maxBuffer, encoding: "utf8" })`.
-4. Classify the outcome into `Ok(value)` or a `BridgeError`.
+3. `spawn(hsPath, ["-c", lua], { stdio: ["ignore", "pipe", "pipe"] })`.
+4. Classify the outcome into a success value or a `BridgeError`.
 
 Calls are asynchronous. Synchronous child process calls are banned, because the
 server holds an open protocol connection on a single thread. A blocking
 subprocess means the server stops answering the client while Hammerspoon works.
+
+### Why stdin is set to ignore
+
+This one line is load-bearing, and getting it wrong makes the entire server
+look broken.
+
+The `hs` command line tool waits for end-of-file on stdin before it exits.
+Node's `execFile` gives a child an open stdin pipe by default and never closes
+it, so `hs` sits there waiting for input that will never arrive. Every single
+call then hangs until the timeout fires. The first version of this bridge used
+`execFile` and every integration test failed with a ten second `Timeout`, while
+the exact same command run by hand in a terminal returned instantly. The
+difference is that a terminal gives the process a real stdin that reaches
+end-of-file.
+
+Measured on this machine: 16ms with stdin closed, versus a full timeout
+without.
+
+`spawn` is used rather than `execFile` because it sets stdin to `ignore` up
+front, as a property of how the child is created, instead of closing the pipe
+afterwards and hoping nothing raced.
+
+Only an integration test could have caught this. Unit tests inject a fake
+`ExecFn`, so they never create a real process and never see the behaviour. The
+regression guard lives in `test/unit/bridge/default-exec.test.ts` under the
+name "completes without hanging, which proves stdin is closed", spawning Node
+itself so it still runs in continuous integration. If that test ever starts
+timing out, stdin handling has regressed.
 
 Timeouts are **per tool**, declared in the tool's spec, not one global number.
 `hs_list_windows` should answer in well under a second. `hs_reload_config` runs
@@ -400,6 +496,39 @@ posting a notification. `unsafe` today means `hs_eval` and nothing else. The
 tier is a property of the spec, so a new tool declares its own, and reviewers
 argue about that declaration.
 
+## The documentation index
+
+`src/docs/docs-index.ts` is the one component that never touches the bridge.
+
+Hammerspoon ships its complete API reference inside the application bundle as
+`docs.json`: roughly 7MB, 140 modules, about 2057 entries. The index reads that
+file lazily, on the first search rather than at startup, so a missing file
+degrades one tool instead of the whole server. It flattens the document into
+entries of qualified name, module, kind, signature, and one-line summary, then
+discards the parsed JSON. The index is a few hundred kilobytes; the raw
+document is mostly long-form prose we do not need to keep.
+
+Ranking is deliberately coarse, ordered by how confidently the query can be
+read as naming something:
+
+| Match                                       | Score |
+| ------------------------------------------- | ----- |
+| Exact qualified name (`hs.window.setFrame`) | 1000  |
+| Exact bare name (`setFrame`)                | 900   |
+| Qualified-name prefix                       | 700   |
+| Bare-name prefix                            | 600   |
+| Qualified-name substring                    | 400   |
+| Every query term appears in the summary     | 200   |
+
+Anything scoring zero is excluded. The prose tier requires _every_ term to be
+present, which stops a query like "window frame" from returning everything that
+merely mentions windows.
+
+Because it reads a file rather than talking to Hammerspoon, `hs_api_search`
+works while Hammerspoon is closed. That is deliberate: the moment you most need
+to look up an API is while writing configuration, which is often exactly when
+Hammerspoon is not running cleanly.
+
 ## Why stdout is sacred
 
 The MCP transport is JSON-RPC over stdio. Stdout **is** the protocol channel.
@@ -436,10 +565,26 @@ skip themselves when there is none. Running them without Hammerspoon is
 harmless. Contributors run them locally for anything touching `src/bridge/` or
 adding a tool.
 
-**The meta-test** asserts that no `*_LUA` constant in `src/tools/` contains a
-template-literal interpolation. It is not testing behaviour, it is testing that
-a design rule still holds. Security properties that depend on people remembering
-things decay. This one is checked by a machine.
+**The end-to-end smoke test** (`test/e2e/smoke.mjs`, run with
+`npm run test:e2e`) spawns the built binary exactly as a client does and speaks
+the real MCP stdio protocol to it: `initialize`, then `tools/list`, then
+several `tools/call`. It checks that the safe tier advertises thirteen tools
+and hides `hs_eval`, that the gated tier advertises fourteen, that a schema
+violation is rejected, that an injection payload comes back as inert data, and
+that nothing but protocol ever reaches stdout. Unit tests verify the modules;
+this verifies the artifact people actually install.
+
+**The meta-test** (`test/unit/tools/lua-safety.test.ts`) enforces the codec
+invariant by inspecting the source. It fails if any `*_LUA` constant contains a
+template-literal interpolation, if such a constant is declared indented (which
+would put it inside a function where it could capture a variable), or if
+`bridge.run` is ever called with anything other than an identifier ending in
+`LUA`. It also asserts that a meaningful number of Lua constants exist, so the
+check cannot quietly pass by matching nothing.
+
+It is not testing behaviour, it is testing that a design rule still holds.
+Security properties that depend on people remembering things decay. This one is
+checked by a machine.
 
 ## Future work
 
