@@ -68,6 +68,23 @@ describe('the real subprocess path', () => {
     expect(Date.now() - started).toBeLessThan(3000);
   });
 
+  // SIGTERM is catchable. A child that ignores it never emits 'close', so
+  // without escalation the promise stayed pending forever and the MCP call
+  // hung with the client waiting indefinitely. SIGKILL cannot be caught.
+  it('escalates to SIGKILL when a child ignores SIGTERM, so the promise always settles', async () => {
+    const stubborn = `process.on('SIGTERM', () => {}); setInterval(() => {}, 1000);`;
+    const started = Date.now();
+
+    await expect(
+      spawnExec(process.execPath, ['-e', stubborn], { timeout: 500, maxBuffer: 1024 })
+    ).rejects.toMatchObject({ killed: true });
+
+    const elapsed = Date.now() - started;
+    // Must wait out the grace period, but must not hang.
+    expect(elapsed).toBeGreaterThanOrEqual(500);
+    expect(elapsed).toBeLessThan(10_000);
+  }, 15_000);
+
   it('captures stdout from a successful child', async () => {
     const result = await spawnExec(process.execPath, ['-e', 'console.log("hello")'], {
       timeout: 5000,

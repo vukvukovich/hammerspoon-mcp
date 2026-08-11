@@ -30,6 +30,9 @@ export const DEFAULT_TIMEOUT_MS = 10_000;
  */
 const MAX_OUTPUT_BYTES = 8 * 1024 * 1024;
 
+/** How long a child gets to honour SIGTERM before it is sent SIGKILL. */
+const SIGKILL_GRACE_MS = 2000;
+
 /**
  * Signatures of "Hammerspoon is not listening" as opposed to "Lua raised".
  * The exact wording has changed across Hammerspoon versions, so several
@@ -104,15 +107,33 @@ export const spawnExec: ExecFn = async (file, args, options) =>
     let timedOut = false;
     let overflowed = false;
 
+    /**
+     * Asks the child to stop, then insists.
+     *
+     * SIGTERM is catchable, and a child that ignores it never emits 'close',
+     * which would leave this promise pending forever: the MCP call would hang
+     * and the client would wait indefinitely, which is worse than any error we
+     * could return. SIGKILL cannot be caught, so escalating guarantees 'close'
+     * arrives and the promise always settles.
+     */
+    let killTimer: NodeJS.Timeout | undefined;
+    const terminate = (): void => {
+      child.kill('SIGTERM');
+      killTimer ??= setTimeout(() => {
+        child.kill('SIGKILL');
+      }, SIGKILL_GRACE_MS);
+    };
+
     const timer = setTimeout(() => {
       timedOut = true;
-      child.kill('SIGTERM');
+      terminate();
     }, options.timeout);
 
     const settle = (action: () => void): void => {
       if (settled) return;
       settled = true;
       clearTimeout(timer);
+      if (killTimer) clearTimeout(killTimer);
       action();
     };
 
@@ -120,7 +141,7 @@ export const spawnExec: ExecFn = async (file, args, options) =>
       stdout += outDecoder.write(chunk);
       if (stdout.length > options.maxBuffer) {
         overflowed = true;
-        child.kill('SIGTERM');
+        terminate();
       }
     });
 
