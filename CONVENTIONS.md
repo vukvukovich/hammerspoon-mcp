@@ -163,7 +163,13 @@ const lua = `hs.alert.show("${args.message}")`;
 
 Arguments go through the codec and arrive as `ARGS`. The Lua body is a static
 constant. A meta-test scans every `*_LUA` constant and fails if it contains a
-template-literal interpolation, so this is enforced, not just requested.
+template-literal interpolation.
+
+Treat that test as a safety net, not a proof. It is pattern matching over
+source text, so it catches the obvious mistake and misses a determined rewrite
+(building the program with `+`, or laundering it through a second variable).
+The rule is binding whether or not the test notices. Issue 14 tracks moving the
+guarantee into the type system, where it can actually be enforced.
 
 ```ts
 // Yes.

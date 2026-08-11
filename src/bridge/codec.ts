@@ -15,7 +15,10 @@
  *
  * Tool bodies are static constants that read fields off ARGS. A unit test
  * asserts that no Lua constant in the codebase contains a template literal
- * interpolation, so the guarantee is enforced rather than merely documented.
+ * interpolation. That check is a safety net rather than a proof: it is pattern
+ * matching over source text, and a determined rewrite (building the program by
+ * concatenation, or laundering it through a second variable) slips past it.
+ * See issue 14 for making this a compile-time guarantee instead.
  */
 
 import { randomBytes } from 'node:crypto';

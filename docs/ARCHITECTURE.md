@@ -583,8 +583,21 @@ would put it inside a function where it could capture a variable), or if
 check cannot quietly pass by matching nothing.
 
 It is not testing behaviour, it is testing that a design rule still holds.
-Security properties that depend on people remembering things decay. This one is
-checked by a machine.
+Security properties that depend on people remembering things decay, so having a
+machine watch this one is worth the small cost.
+
+Be honest about how strong it is: **it is a safety net, not a proof.** It is
+three regular expressions over source text. An adversarial review found several
+rewrites that slip past, all of the same shape: build the program with `+` or
+`.join()` instead of a template literal, launder it through a second variable
+before assigning it to a `*_LUA` name, or call the bridge through a destructured
+`run`. Nothing in the codebase does any of that today, and the rule is binding
+whether or not the test notices, but the test cannot be the thing you rely on.
+
+Issue 14 tracks the real fix: a branded `LuaProgram` type produced only by a
+template tag whose `...values: never[]` signature makes any interpolation a
+compile error. That moves the guarantee from pattern matching to the type
+checker, where it holds by construction.
 
 ## Future work
 
