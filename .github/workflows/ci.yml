@@ -59,3 +59,138 @@ jobs:
 
       - name: Build
         run: npm run build
+
+  commit-messages:
+    name: Commit messages
+    # The set of "new commits" only has a meaning for a pull request, so this is
+    # skipped rather than failed on push and workflow_dispatch runs.
+    if: github.event_name == 'pull_request'
+    # Deliberately outside the Node matrix: the check is grep, it needs no Node,
+    # no npm ci, and no reason to run twice.
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+        with:
+          # merge-base needs the real history, which the default shallow fetch
+          # does not have.
+          fetch-depth: 0
+
+      # This mirrors .githooks/commit-msg, which only protects contributors who
+      # ran "git config core.hooksPath .githooks". Same types, same skip list,
+      # same separate trailing-period check. Change one, change the other.
+      - name: Validate commit subjects
+        env:
+          # Passed as environment values rather than interpolated into the script
+          # body, so they stay data and can never be read as shell.
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          set -eu
+
+          types='Add|Fix|Ref|Opt|Rmv|Doc|Tst|Sty|Chr|Mov|Rnm|Dep|Sec|Cfg|Rev'
+          pattern="^($types)(!)?( [a-z][a-z0-9]*){0,2} [a-z].+$"
+
+          # The base branch can move while a pull request is open, so measure from
+          # the fork point instead of the current base tip. Otherwise commits that
+          # landed on main after the branch started would be judged again here.
+          merge_base=$(git merge-base "$BASE_SHA" "$HEAD_SHA")
+
+          failures=$(mktemp)
+          checked=0
+          skipped=0
+
+          for sha in $(git rev-list "$merge_base..$HEAD_SHA"); do
+            subject=$(git log -1 --format=%s "$sha")
+            author=$(git log -1 --format=%ae "$sha")
+
+            # Dependabot renders its configured "Chr" prefix as "Chr: Bump ...",
+            # which the grammar rejects twice over (the colon and the capital B),
+            # and how it renders is not ours to change. Teaching the pattern to
+            # accept "Chr: " would also let human commits pass here that the local
+            # hook still rejects, and local and CI must never disagree. So the bot
+            # is skipped by author instead: a human cannot get the same treatment
+            # by typing a colon, and human commits pushed onto a Dependabot branch
+            # carry their own address and are still checked. The pattern is quoted
+            # because [bot] is a glob character class otherwise.
+            case "$author" in
+              *'dependabot[bot]@users.noreply.github.com')
+                skipped=$((skipped + 1))
+                continue
+                ;;
+            esac
+
+            # Machine generated subjects are not ours to police.
+            case "$subject" in
+              'Merge '* | 'Revert '* | 'fixup!'* | 'squash!'*)
+                skipped=$((skipped + 1))
+                continue
+                ;;
+            esac
+
+            checked=$((checked + 1))
+
+            # A trailing period slips past the regex, so it gets its own check.
+            problem=''
+            if ! printf '%s\n' "$subject" | grep -Eq "$pattern"; then
+              problem='does not match the required grammar'
+            elif printf '%s\n' "$subject" | grep -Eq '\.$'; then
+              problem='ends with a period'
+            fi
+
+            [ -n "$problem" ] || continue
+
+            # Collected rather than reported here, so one run names every offender
+            # and the author fixes the whole branch in a single rebase.
+            printf '    %s\n      %s\n\n' "$subject" "$problem" >>"$failures"
+          done
+
+          if [ ! -s "$failures" ]; then
+            printf '  %s commit subject(s) checked, %s skipped, all valid.\n' "$checked" "$skipped"
+            exit 0
+          fi
+
+          printf '\n  Rejected. These commit subjects do not follow the standard:\n\n' >&2
+          cat "$failures" >&2
+
+          cat >&2 <<'EOF'
+            Expected:      Type[!] [scope] [scope] description
+
+              Type         one of the types below, capitalised exactly as shown
+              !            optional, marks a breaking change
+              scope        zero to two lowercase words, no punctuation
+              description  imperative, starts lowercase, no trailing period
+
+            Types:
+
+              Add   new features and user-facing capabilities
+              Fix   bug fixes
+              Ref   internal restructuring with no behaviour change
+              Opt   performance improvements
+              Rmv   removing something
+              Doc   documentation and comments
+              Tst   tests
+              Sty   cosmetic only, no logic touched
+              Chr   ci/cd, tooling, dependencies, infrastructure
+              Mov   relocating a file or module, contents unchanged
+              Rnm   renames
+              Dep   deprecating something that still works
+              Sec   security-relevant changes
+              Cfg   configuration-only changes
+              Rev   reverting an earlier commit
+
+            Scopes used here: bridge, tools, server, docs, ci, deps, test
+
+            Good examples:
+
+              Add bridge argument codec
+              Fix! server tool registration order
+              Chr deps bump vitest to 4.1
+              Doc docs describe the tool tiers
+
+            Full spec:  CONTRIBUTING.md, section "Commit messages"
+            Fix with:   git rebase -i, reword the offending commits, force push
+            Locally:    git config core.hooksPath .githooks catches this before push
+
+          EOF
+          exit 1
