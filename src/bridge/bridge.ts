@@ -9,7 +9,13 @@
 import { spawn } from 'node:child_process';
 import { StringDecoder } from 'node:string_decoder';
 
-import { buildProgram, encodeArgs, envelopeToResult, parseEnvelope } from './codec.js';
+import {
+  buildProgram,
+  encodeArgs,
+  envelopeToResult,
+  newResultMarker,
+  parseEnvelope,
+} from './codec.js';
 import {
   hsNotFound,
   hsNotRunning,
@@ -235,7 +241,10 @@ export class HammerspoonBridge {
     const encoded = encodeArgs(args);
     if (!encoded.ok) return encoded;
 
-    const program = buildProgram(luaBody, encoded.value);
+    // Fresh per call, so nothing in the arguments (which were composed before
+    // this existed) can impersonate the result line on stdout.
+    const marker = newResultMarker();
+    const program = buildProgram(luaBody, encoded.value, marker);
     const timeoutMs = options.timeoutMs ?? this.#defaultTimeoutMs;
 
     let raw: ExecResult;
@@ -248,7 +257,7 @@ export class HammerspoonBridge {
       return { ok: false, error: this.#classifyExecFailure(cause, timeoutMs) };
     }
 
-    const envelope = parseEnvelope(raw.stdout);
+    const envelope = parseEnvelope(raw.stdout, marker);
     if (!envelope.ok) {
       // A failure to parse usually means Hammerspoon never answered, and the
       // real explanation is on stderr.

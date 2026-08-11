@@ -8,8 +8,18 @@ function bridgeWith(exec: ExecFn): HammerspoonBridge {
   return new HammerspoonBridge({ hsPathOverride: FAKE_HS, exec });
 }
 
-function stdout(text: string): ExecFn {
-  return async () => Promise.resolve({ stdout: text, stderr: '' });
+/**
+ * Stands in for the hs CLI. The real one prints the result prefixed with the
+ * per-call marker the program asks for, so the fake reads that marker out of
+ * the program it was handed and does the same. Without it the bridge would
+ * correctly reject the reply as unmarked.
+ */
+function stdout(payload: string): ExecFn {
+  return async (_file, args) => {
+    const program = args[1] ?? '';
+    const marker = /return "([A-Za-z0-9]+)" \.\. __payload/.exec(program)?.[1] ?? '';
+    return Promise.resolve({ stdout: `${marker}${payload}`, stderr: '' });
+  };
 }
 
 /** Typed as Error because that is what child_process actually rejects with. */
