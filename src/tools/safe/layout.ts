@@ -1,6 +1,7 @@
 import { z } from 'zod';
 
 import { defineTool, fromBridge } from '../registry.js';
+import { lua } from '../../bridge/lua.js';
 
 /**
  * Named window layouts.
@@ -67,7 +68,7 @@ export function applyFraction(
   };
 }
 
-const WINDOW_LAYOUT_LUA = `
+const WINDOW_LAYOUT_LUA = lua`
 local target
 if ARGS.windowId then
   target = hs.window.get(ARGS.windowId)

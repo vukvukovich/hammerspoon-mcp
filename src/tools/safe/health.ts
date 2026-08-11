@@ -1,12 +1,13 @@
 import { z } from 'zod';
 
 import { defineTool, fromBridge } from '../registry.js';
+import { lua } from '../../bridge/lua.js';
 
 /**
  * Static Lua. Never interpolate into this string: see src/bridge/codec.ts for
  * why arguments travel through ARGS instead.
  */
-const HEALTH_LUA = `
+const HEALTH_LUA = lua`
 return {
   hammerspoonVersion = hs.processInfo.version,
   screenCount = #hs.screen.allScreens(),

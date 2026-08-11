@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
 
 import { HammerspoonBridge, type ExecFn } from '../../../src/bridge/bridge.js';
+import { lua } from '../../../src/bridge/lua.js';
 
 const FAKE_HS = '/fake/bin/hs';
 
@@ -30,14 +31,14 @@ function rejectsWith(error: Error): ExecFn {
 describe('HammerspoonBridge.run', () => {
   it('returns the decoded value on success', async () => {
     const bridge = bridgeWith(stdout('{"ok":true,"value":{"count":2}}'));
-    const result = await bridge.run('return {}');
+    const result = await bridge.run(lua`return {}`);
     expect(result).toEqual({ ok: true, value: { count: 2 } });
   });
 
   it('invokes the binary with an argv array and never a shell string', async () => {
     const exec = vi.fn<ExecFn>(async () => Promise.resolve({ stdout: '{"ok":true}', stderr: '' }));
     const bridge = bridgeWith(exec);
-    await bridge.run('return 1', { app: 'Safari' });
+    await bridge.run(lua`return 1`, { app: 'Safari' });
 
     expect(exec).toHaveBeenCalledTimes(1);
     const [file, args] = exec.mock.calls[0] ?? [];
@@ -52,13 +53,13 @@ describe('HammerspoonBridge.run', () => {
 
   it('passes the caller timeout through to the subprocess', async () => {
     const exec = vi.fn<ExecFn>(async () => Promise.resolve({ stdout: '{"ok":true}', stderr: '' }));
-    await bridgeWith(exec).run('return 1', {}, { timeoutMs: 1234 });
+    await bridgeWith(exec).run(lua`return 1`, {}, { timeoutMs: 1234 });
     expect(exec.mock.calls[0]?.[2]).toMatchObject({ timeout: 1234 });
   });
 
   it('surfaces a Lua error as LuaError with its message', async () => {
     const bridge = bridgeWith(stdout('{"ok":false,"err":"no window has id 9"}'));
-    const result = await bridge.run('return 1');
+    const result = await bridge.run(lua`return 1`);
     expect(result.ok).toBe(false);
     if (result.ok) return;
     expect(result.error.kind).toBe('LuaError');
@@ -67,7 +68,7 @@ describe('HammerspoonBridge.run', () => {
 
   it('classifies a missing binary as HsNotFound', async () => {
     const missing = Object.assign(new Error('spawn ENOENT'), { code: 'ENOENT' });
-    const result = await bridgeWith(rejectsWith(missing)).run('return 1');
+    const result = await bridgeWith(rejectsWith(missing)).run(lua`return 1`);
     expect(result.ok).toBe(false);
     if (result.ok) return;
     expect(result.error.kind).toBe('HsNotFound');
@@ -76,7 +77,7 @@ describe('HammerspoonBridge.run', () => {
 
   it('classifies a killed process as Timeout', async () => {
     const killed = Object.assign(new Error('timed out'), { killed: true, signal: 'SIGTERM' });
-    const result = await bridgeWith(rejectsWith(killed)).run('return 1', {}, { timeoutMs: 500 });
+    const result = await bridgeWith(rejectsWith(killed)).run(lua`return 1`, {}, { timeoutMs: 500 });
     expect(result.ok).toBe(false);
     if (result.ok) return;
     expect(result.error.kind).toBe('Timeout');
@@ -90,7 +91,7 @@ describe('HammerspoonBridge.run', () => {
     'Hammerspoon is not running',
   ])('classifies %j on stderr as HsNotRunning', async (stderrText) => {
     const failure = Object.assign(new Error('exit 1'), { stderr: stderrText });
-    const result = await bridgeWith(rejectsWith(failure)).run('return 1');
+    const result = await bridgeWith(rejectsWith(failure)).run(lua`return 1`);
     expect(result.ok).toBe(false);
     if (result.ok) return;
     expect(result.error.kind).toBe('HsNotRunning');
@@ -100,14 +101,14 @@ describe('HammerspoonBridge.run', () => {
   it('classifies unparseable output with a connection complaint as HsNotRunning', async () => {
     const exec: ExecFn = async () =>
       Promise.resolve({ stdout: 'nonsense', stderr: "can't connect to Hammerspoon" });
-    const result = await bridgeWith(exec).run('return 1');
+    const result = await bridgeWith(exec).run(lua`return 1`);
     expect(result.ok).toBe(false);
     if (result.ok) return;
     expect(result.error.kind).toBe('HsNotRunning');
   });
 
   it('classifies unexplained unparseable output as ProtocolError', async () => {
-    const result = await bridgeWith(stdout('not json at all')).run('return 1');
+    const result = await bridgeWith(stdout('not json at all')).run(lua`return 1`);
     expect(result.ok).toBe(false);
     if (result.ok) return;
     expect(result.error.kind).toBe('ProtocolError');
@@ -115,7 +116,7 @@ describe('HammerspoonBridge.run', () => {
 
   it('classifies an unexplained non-zero exit as ProtocolError', async () => {
     const failure = Object.assign(new Error('exit 3'), { stderr: 'something odd' });
-    const result = await bridgeWith(rejectsWith(failure)).run('return 1');
+    const result = await bridgeWith(rejectsWith(failure)).run(lua`return 1`);
     expect(result.ok).toBe(false);
     if (result.ok) return;
     expect(result.error.kind).toBe('ProtocolError');
@@ -124,7 +125,7 @@ describe('HammerspoonBridge.run', () => {
   it('reports HsNotFound without executing anything when no binary exists', async () => {
     const exec = vi.fn<ExecFn>();
     const bridge = new HammerspoonBridge({ exec, exists: () => false });
-    const result = await bridge.run('return 1');
+    const result = await bridge.run(lua`return 1`);
 
     expect(exec).not.toHaveBeenCalled();
     expect(bridge.hsPath).toBeUndefined();
@@ -135,7 +136,7 @@ describe('HammerspoonBridge.run', () => {
 
   it('rejects an oversized payload before spawning anything', async () => {
     const exec = vi.fn<ExecFn>();
-    const result = await bridgeWith(exec).run('return 1', { blob: 'x'.repeat(400_000) });
+    const result = await bridgeWith(exec).run(lua`return 1`, { blob: 'x'.repeat(400_000) });
 
     expect(exec).not.toHaveBeenCalled();
     expect(result.ok).toBe(false);

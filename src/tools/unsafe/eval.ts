@@ -1,6 +1,7 @@
 import { z } from 'zod';
 
 import { defineTool, fromBridge } from '../registry.js';
+import { lua } from '../../bridge/lua.js';
 
 /**
  * Arbitrary Lua evaluation. Gated behind HS_MCP_TOOLS=all.
@@ -14,7 +15,7 @@ import { defineTool, fromBridge } from '../registry.js';
  * The security boundary is the tier, not the encoding. Anything Hammerspoon
  * can do, this tool can do.
  */
-const EVAL_LUA = `
+const EVAL_LUA = lua`
 local chunk, compileError = load(ARGS.code, "hs_eval", "t")
 if not chunk then error("syntax error: " .. tostring(compileError), 0) end
 return chunk()

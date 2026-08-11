@@ -15,10 +15,10 @@
  *
  * Tool bodies are static constants that read fields off ARGS. A unit test
  * asserts that no Lua constant in the codebase contains a template literal
- * interpolation. That check is a safety net rather than a proof: it is pattern
- * matching over source text, and a determined rewrite (building the program by
- * concatenation, or laundering it through a second variable) slips past it.
- * See issue 14 for making this a compile-time guarantee instead.
+ * interpolation. That check is the second layer. The first is the type system:
+ * bridge.run accepts only a LuaProgram, and the only way to make one is the
+ * `lua` template tag, whose signature cannot express an interpolation. See
+ * src/bridge/lua.ts.
  */
 
 import { randomBytes } from 'node:crypto';

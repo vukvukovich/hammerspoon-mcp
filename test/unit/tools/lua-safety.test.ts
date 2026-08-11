@@ -26,13 +26,30 @@ async function collectTypeScriptFiles(directory: string): Promise<string[]> {
   return files.flat();
 }
 
-/** Matches `const NAME_LUA = \`...\`;` and captures the template body. */
-const LUA_CONSTANT_PATTERN = /const\s+([A-Z0-9_]*LUA)\s*=\s*`([\s\S]*?)`/g;
+/**
+ * Matches `const NAME_LUA = lua\`...\`;` and captures the template body. The
+ * tag is optional in the pattern so an untagged constant is still inspected
+ * rather than silently skipped, even though the type system now rejects one.
+ */
+const LUA_CONSTANT_PATTERN = /const\s+([A-Z0-9_]*LUA)\s*=\s*(?:lua)?`([\s\S]*?)`/g;
+
+/**
+ * Strips comments before scanning.
+ *
+ * Documentation legitimately shows what NOT to write, and src/bridge/lua.ts
+ * does exactly that. Without this, the file explaining the rule fails the test
+ * enforcing it, which would train people to weaken the test.
+ */
+function withoutComments(source: string): string {
+  return source.replace(/\/\*[\s\S]*?\*\//g, '').replace(/(^|[^:])\/\/.*$/gm, '$1');
+}
 
 describe('Lua source constants', () => {
   it('exist, so the pattern below is actually testing something', async () => {
     const files = await collectTypeScriptFiles(SRC_ROOT);
-    const bodies = await Promise.all(files.map(async (file) => readFile(file, 'utf8')));
+    const bodies = await Promise.all(
+      files.map(async (file) => withoutComments(await readFile(file, 'utf8')))
+    );
     const matches = bodies.flatMap((body) => [...body.matchAll(LUA_CONSTANT_PATTERN)]);
     expect(matches.length).toBeGreaterThan(5);
   });
@@ -42,7 +59,7 @@ describe('Lua source constants', () => {
     const offenders: string[] = [];
 
     for (const file of files) {
-      const contents = await readFile(file, 'utf8');
+      const contents = withoutComments(await readFile(file, 'utf8'));
       for (const match of contents.matchAll(LUA_CONSTANT_PATTERN)) {
         const [, name = 'unknown', body = ''] = match;
         if (body.includes('${')) {
@@ -58,7 +75,7 @@ describe('Lua source constants', () => {
     const files = await collectTypeScriptFiles(SRC_ROOT);
 
     for (const file of files) {
-      const contents = await readFile(file, 'utf8');
+      const contents = withoutComments(await readFile(file, 'utf8'));
       // A Lua constant indented by horizontal whitespace sits inside a
       // function, which means it is rebuilt per call and could capture a
       // variable. Matching \s+ here would be wrong: it spans newlines, so a
@@ -68,13 +85,49 @@ describe('Lua source constants', () => {
   });
 });
 
+describe('the lua tag', () => {
+  it('is used for every Lua constant, so the compiler sees them all', async () => {
+    const files = await collectTypeScriptFiles(SRC_ROOT);
+    const untagged: string[] = [];
+
+    for (const file of files) {
+      const contents = withoutComments(await readFile(file, 'utf8'));
+      for (const match of contents.matchAll(LUA_CONSTANT_PATTERN)) {
+        const [whole, name = 'unknown'] = match;
+        if (!whole.includes('= lua`')) {
+          untagged.push(`${file}: ${name}`);
+        }
+      }
+    }
+
+    expect(untagged).toEqual([]);
+  });
+
+  it('is never bypassed in src by the escape hatch', async () => {
+    // unsafeLuaFromString exists for tests that build Lua deliberately. In
+    // src it would defeat the point of the branded type, so it is banned here
+    // rather than left to reviewer memory.
+    const files = await collectTypeScriptFiles(SRC_ROOT);
+    const offenders: string[] = [];
+
+    for (const file of files) {
+      if (file.endsWith('lua.ts')) continue; // the definition itself
+      const contents = withoutComments(await readFile(file, 'utf8'));
+      if (/unsafeLuaFromString\s*\(/.test(contents)) offenders.push(file);
+      if (/as\s+unknown\s+as\s+LuaProgram|as\s+LuaProgram/.test(contents)) offenders.push(file);
+    }
+
+    expect(offenders).toEqual([]);
+  });
+});
+
 describe('bridge.run call sites', () => {
   it('always pass a named constant as the program, never an expression', async () => {
     const files = await collectTypeScriptFiles(SRC_ROOT);
     const offenders: string[] = [];
 
     for (const file of files) {
-      const contents = await readFile(file, 'utf8');
+      const contents = withoutComments(await readFile(file, 'utf8'));
       for (const match of contents.matchAll(/bridge\.run\(\s*([^,)\s]+)/g)) {
         const argument = match[1] ?? '';
         // Permitted: an identifier ending in LUA. Anything else (a template

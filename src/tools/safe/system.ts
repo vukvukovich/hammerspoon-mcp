@@ -1,8 +1,9 @@
 import { z } from 'zod';
 
 import { defineTool, fromBridge, textResult } from '../registry.js';
+import { lua } from '../../bridge/lua.js';
 
-const SCREENS_LUA = `
+const SCREENS_LUA = lua`
 local out = {}
 local primary = hs.screen.primaryScreen()
 for _, s in ipairs(hs.screen.allScreens()) do
@@ -19,7 +20,7 @@ end
 return out
 `;
 
-const CONSOLE_TAIL_LUA = `
+const CONSOLE_TAIL_LUA = lua`
 local text = tostring(hs.console.getConsole() or "")
 local lines = {}
 for line in string.gmatch(text, "[^\\n]+") do
@@ -34,7 +35,7 @@ end
 return { totalLines = #lines, returned = #tail, text = table.concat(tail, "\\n") }
 `;
 
-const NOTIFY_LUA = `
+const NOTIFY_LUA = lua`
 hs.alert.show(ARGS.text, ARGS.seconds or 2)
 return { shown = true }
 `;
@@ -45,7 +46,7 @@ return { shown = true }
  * that is still trying to send us a reply. A short timer lets the reply leave
  * first.
  */
-const RELOAD_LUA = `
+const RELOAD_LUA = lua`
 hs.timer.doAfter(0.15, hs.reload)
 return { scheduled = true }
 `;

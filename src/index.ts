@@ -18,6 +18,8 @@ export type { LuaEnvelope } from './bridge/codec.js';
 export { formatBridgeError } from './bridge/errors.js';
 export type { BridgeError, BridgeErrorKind, BridgeResult } from './bridge/errors.js';
 export { candidatePaths, resolveHsPath } from './bridge/hs-path.js';
+export { lua, unsafeLuaFromString } from './bridge/lua.js';
+export type { LuaProgram } from './bridge/lua.js';
 export type { HsPathLookup, ResolveHsPathOptions } from './bridge/hs-path.js';
 export { ENV_KEYS, loadConfig, parseExposure } from './config/env.js';
 export type { ServerConfig, ToolExposure } from './config/env.js';

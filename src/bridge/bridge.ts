@@ -26,6 +26,7 @@ import {
   type BridgeResult,
 } from './errors.js';
 import { resolveHsPath, type HsPathLookup } from './hs-path.js';
+import type { LuaProgram } from './lua.js';
 
 /** Hammerspoon runs Lua on its main thread, so a hung call blocks everything. */
 export const DEFAULT_TIMEOUT_MS = 10_000;
@@ -224,13 +225,17 @@ export class HammerspoonBridge {
   /**
    * Runs a static Lua body with the given arguments.
    *
-   * `luaBody` must be a constant defined in this codebase. Never pass a string
-   * assembled from user or model input: that would reintroduce exactly the
-   * injection hole the codec exists to close. The single legitimate exception
-   * is the gated hs_eval tool, where running supplied code is the whole point.
+   * The parameter is a `LuaProgram`, not a string, and the only way to make
+   * one is the `lua` template tag, which cannot express an interpolation. So
+   * "did anyone splice a value into this program" is answered by the compiler
+   * rather than by review. See src/bridge/lua.ts.
+   *
+   * Arguments travel separately through the codec and arrive as `ARGS`. That
+   * includes hs_eval's supplied code, which is compiled inside Lua with
+   * load(), so even there the program itself stays a constant.
    */
   async run(
-    luaBody: string,
+    luaBody: LuaProgram,
     args: unknown = {},
     options: RunOptions = {}
   ): Promise<BridgeResult<unknown>> {

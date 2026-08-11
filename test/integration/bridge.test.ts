@@ -12,6 +12,7 @@
 import { describe, expect, it } from 'vitest';
 
 import { HammerspoonBridge } from '../../src/bridge/bridge.js';
+import { lua } from '../../src/bridge/lua.js';
 import { DocsIndex } from '../../src/docs/docs-index.js';
 import { ALL_TOOLS } from '../../src/tools/index.js';
 import { applyFraction, LAYOUT_PRESETS } from '../../src/tools/safe/layout.js';
@@ -21,7 +22,7 @@ const available = bridge.hsPath !== undefined;
 
 describe.skipIf(!available)('bridge against real Hammerspoon', () => {
   it('completes a round trip', async () => {
-    const result = await bridge.run('return "pong"');
+    const result = await bridge.run(lua`return "pong"`);
     expect(result).toEqual({ ok: true, value: 'pong' });
   });
 
@@ -35,12 +36,12 @@ describe.skipIf(!available)('bridge against real Hammerspoon', () => {
       injection: '"); os.exit(); ("',
       emoji: '🚀',
     };
-    const result = await bridge.run('return ARGS', hostile);
+    const result = await bridge.run(lua`return ARGS`, hostile);
     expect(result).toEqual({ ok: true, value: hostile });
   });
 
   it('reports a Lua runtime error as LuaError', async () => {
-    const result = await bridge.run('error("deliberate", 0)');
+    const result = await bridge.run(lua`error("deliberate", 0)`);
     expect(result.ok).toBe(false);
     if (result.ok) return;
     expect(result.error.kind).toBe('LuaError');
@@ -48,22 +49,45 @@ describe.skipIf(!available)('bridge against real Hammerspoon', () => {
   });
 
   it('reports a Lua syntax error rather than hanging', async () => {
-    const result = await bridge.run('this is not lua');
+    const result = await bridge.run(lua`this is not lua`);
     expect(result.ok).toBe(false);
   });
 
   it('returns undefined for a body with no return value', async () => {
-    const result = await bridge.run('local unused = 1');
+    const result = await bridge.run(lua`local unused = 1`);
     expect(result).toEqual({ ok: true, value: undefined });
   });
 
   it('honours a short timeout', async () => {
-    const result = await bridge.run('hs.timer.usleep(3000000) return 1', {}, { timeoutMs: 400 });
+    // usleep blocks Hammerspoon's main thread, and killing our client does not
+    // wake it. So keep the sleep barely longer than the timeout: a long one
+    // leaves Hammerspoon unresponsive well after this test passes, and every
+    // test that follows races it. That is what made hs_console_tail fail
+    // intermittently, and only when run as part of the suite.
+    const result = await bridge.run(lua`hs.timer.usleep(700000) return 1`, {}, { timeoutMs: 300 });
     expect(result.ok).toBe(false);
     if (result.ok) return;
     expect(result.error.kind).toBe('Timeout');
+
+    await waitForResponsive();
   });
 });
+
+/**
+ * Blocks until Hammerspoon answers again.
+ *
+ * Any test that deliberately wedges the main thread has to clean up after
+ * itself, otherwise it leaks its damage into whatever runs next as a confusing
+ * timeout somewhere unrelated.
+ */
+async function waitForResponsive(attempts = 20): Promise<void> {
+  for (let attempt = 0; attempt < attempts; attempt += 1) {
+    const probe = await bridge.run(lua`return "awake"`, {}, { timeoutMs: 1000 });
+    if (probe.ok) return;
+    await new Promise((resolve) => setTimeout(resolve, 200));
+  }
+  throw new Error('Hammerspoon did not become responsive again');
+}
 
 /**
  * Executes each tool's real Lua. This is the check that catches a typo in a
@@ -103,7 +127,7 @@ describe.skipIf(!available)('tool Lua executes against real Hammerspoon', () => 
   });
 
   it('hs_list_windows returns usable window ids', async () => {
-    const result = await bridge.run(`
+    const result = await bridge.run(lua`
 local out = {}
 for _, w in ipairs(hs.window.allWindows()) do
   local id = w:id()
@@ -123,7 +147,7 @@ return #out
    * rearrange someone's desktop.
    */
   it('hs_window_layout places a window exactly where applyFraction predicts', async () => {
-    const focused = await bridge.run(`
+    const focused = await bridge.run(lua`
 local w = hs.window.focusedWindow()
 if not w then return nil end
 local f = w:frame()
@@ -156,7 +180,7 @@ return { id = w:id(), frame = { x = f.x, y = f.y, w = f.w, h = f.h } }
       expect(payload.frame.w).toBeCloseTo(predicted.w, 0);
     } finally {
       await bridge.run(
-        `
+        lua`
 local w = hs.window.get(ARGS.id)
 if w then w:setFrame({ x = ARGS.frame.x, y = ARGS.frame.y, w = ARGS.frame.w, h = ARGS.frame.h }) end
 return true

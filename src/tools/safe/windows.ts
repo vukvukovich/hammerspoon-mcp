@@ -1,13 +1,14 @@
 import { z } from 'zod';
 
 import { defineTool, fromBridge } from '../registry.js';
+import { lua } from '../../bridge/lua.js';
 
 /**
  * All Lua in this file is a static constant. Arguments arrive through the ARGS
  * table produced by the codec, never by interpolation. See src/bridge/codec.ts.
  */
 
-const LIST_WINDOWS_LUA = `
+const LIST_WINDOWS_LUA = lua`
 local filter = ARGS.app
 if filter then filter = string.lower(filter) end
 local out = {}
@@ -33,7 +34,7 @@ end
 return out
 `;
 
-const FOCUS_WINDOW_LUA = `
+const FOCUS_WINDOW_LUA = lua`
 local target
 if ARGS.id then
   target = hs.window.get(ARGS.id)
@@ -51,7 +52,7 @@ return {
 }
 `;
 
-const MOVE_WINDOW_LUA = `
+const MOVE_WINDOW_LUA = lua`
 local target = hs.window.get(ARGS.id)
 if not target then error("no window has id " .. tostring(ARGS.id), 0) end
 local f = target:frame()

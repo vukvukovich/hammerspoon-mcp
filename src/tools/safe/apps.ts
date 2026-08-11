@@ -1,8 +1,9 @@
 import { z } from 'zod';
 
 import { defineTool, fromBridge } from '../registry.js';
+import { lua } from '../../bridge/lua.js';
 
-const LIST_APPS_LUA = `
+const LIST_APPS_LUA = lua`
 local filter = ARGS.query
 if filter then filter = string.lower(filter) end
 local out = {}
@@ -21,13 +22,13 @@ end
 return out
 `;
 
-const LAUNCH_APP_LUA = `
+const LAUNCH_APP_LUA = lua`
 local ok = hs.application.launchOrFocus(ARGS.name)
 if not ok then error("could not launch or focus an app named " .. tostring(ARGS.name), 0) end
 return { launched = ARGS.name }
 `;
 
-const FOCUS_APP_LUA = `
+const FOCUS_APP_LUA = lua`
 local app = hs.application.find(ARGS.name)
 if not app then error("no running app matches " .. tostring(ARGS.name), 0) end
 app:activate()

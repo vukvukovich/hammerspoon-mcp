@@ -586,18 +586,40 @@ It is not testing behaviour, it is testing that a design rule still holds.
 Security properties that depend on people remembering things decay, so having a
 machine watch this one is worth the small cost.
 
-Be honest about how strong it is: **it is a safety net, not a proof.** It is
-three regular expressions over source text. An adversarial review found several
-rewrites that slip past, all of the same shape: build the program with `+` or
-`.join()` instead of a template literal, launder it through a second variable
-before assigning it to a `*_LUA` name, or call the bridge through a destructured
-`run`. Nothing in the codebase does any of that today, and the rule is binding
-whether or not the test notices, but the test cannot be the thing you rely on.
+It is the second layer, not the first. On its own it is three regular
+expressions over source text, and an adversarial review found several rewrites
+that slip past: build the program with `+` or `.join()`, launder it through a
+second variable before assigning it to a `*_LUA` name, or call the bridge
+through a destructured `run`.
 
-Issue 14 tracks the real fix: a branded `LuaProgram` type produced only by a
-template tag whose `...values: never[]` signature makes any interpolation a
-compile error. That moves the guarantee from pattern matching to the type
-checker, where it holds by construction.
+**The first layer is the type system**, and it catches all of those.
+
+`HammerspoonBridge.run` does not accept a `string`. It accepts a `LuaProgram`,
+a branded type whose only constructor is the `lua` template tag in
+`src/bridge/lua.ts`:
+
+```ts
+export type LuaProgram = string & { readonly [luaProgramBrand]: true };
+
+export function lua(source: TemplateStringsArray, ...values: never[]): LuaProgram;
+```
+
+`...values: never[]` is what does the work. A tagged template with a
+substitution passes that value as an argument, and nothing is assignable to
+`never`, so `lua\`return ${x}\``does not compile. Concatenation,`.join()`,
+`.replace()`, `String.raw`, and plain strings all fail too, because none of
+them produce the brand.
+
+`test/unit/bridge/lua-type-safety.test.ts` asserts this. Each bypass sits under
+a `@ts-expect-error`, so if any of them ever starts compiling, TypeScript
+reports the directive as unused and the typecheck fails. The test cannot rot
+into a no-op the way a regex can.
+
+Two honest limits. Anyone who can commit can still write `as LuaProgram`, so
+this stops mistakes rather than a hostile maintainer, and the meta-test bans
+that cast and the named escape hatch anywhere under `src/`. And the brand is
+erased at runtime: it is a compile-time claim, which is exactly where the
+mistake it prevents would happen.
 
 ## Future work
 

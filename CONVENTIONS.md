@@ -165,11 +165,21 @@ Arguments go through the codec and arrive as `ARGS`. The Lua body is a static
 constant. A meta-test scans every `*_LUA` constant and fails if it contains a
 template-literal interpolation.
 
-Treat that test as a safety net, not a proof. It is pattern matching over
-source text, so it catches the obvious mistake and misses a determined rewrite
-(building the program with `+`, or laundering it through a second variable).
-The rule is binding whether or not the test notices. Issue 14 tracks moving the
-guarantee into the type system, where it can actually be enforced.
+More importantly, the compiler enforces it. Write every Lua body with the
+`lua` template tag, and it becomes a `LuaProgram`, which is the only type
+`bridge.run` accepts:
+
+```ts
+const MOVE_WINDOW_LUA = lua`
+local w = hs.window.get(ARGS.id)
+`;
+```
+
+Interpolation does not compile, and neither does concatenation, `.join()`,
+`.replace()`, or a plain string. You do not have to remember the rule; you
+cannot express the violation. The regex meta-test stays as a cheap second
+layer, and it also bans `as LuaProgram` and the `unsafeLuaFromString` escape
+hatch anywhere under `src/`.
 
 ```ts
 // Yes.

@@ -10,6 +10,7 @@
 import { describe, expect, it } from 'vitest';
 
 import { HammerspoonBridge, spawnExec } from '../../../src/bridge/bridge.js';
+import { lua } from '../../../src/bridge/lua.js';
 
 /** Drives the private defaultExec by pointing the bridge at the node binary. */
 function nodeBridge(): HammerspoonBridge {
@@ -27,7 +28,7 @@ describe('the real subprocess path', () => {
     // waits for EOF on stdin, so an inherited open pipe blocks forever. If
     // this test starts timing out, stdin handling regressed.
     const started = Date.now();
-    const result = await nodeBridge().run('1 + 1', {}, { timeoutMs: 5000 });
+    const result = await nodeBridge().run(lua`1 + 1`, {}, { timeoutMs: 5000 });
     const elapsed = Date.now() - started;
 
     expect(elapsed).toBeLessThan(4000);
@@ -42,7 +43,7 @@ describe('the real subprocess path', () => {
     const bridge = new HammerspoonBridge({
       hsPathOverride: '/nonexistent/definitely/not/hs',
     });
-    const result = await bridge.run('return 1');
+    const result = await bridge.run(lua`return 1`);
     expect(result.ok).toBe(false);
     if (result.ok) return;
     expect(result.error.kind).toBe('HsNotFound');
@@ -50,7 +51,11 @@ describe('the real subprocess path', () => {
 
   it('reports a non-zero exit as ProtocolError', async () => {
     // Invalid syntax makes node --check exit non-zero.
-    const result = await nodeBridge().run('this is (not valid javascript', {}, { timeoutMs: 5000 });
+    const result = await nodeBridge().run(
+      lua`this is (not valid javascript`,
+      {},
+      { timeoutMs: 5000 }
+    );
     expect(result.ok).toBe(false);
     if (result.ok) return;
     expect(result.error.kind).toBe('ProtocolError');
