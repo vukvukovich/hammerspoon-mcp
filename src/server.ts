@@ -2,6 +2,7 @@ import { McpServer } from '@modelcontextprotocol/server';
 
 import { HammerspoonBridge } from './bridge/bridge.js';
 import type { ServerConfig } from './config/env.js';
+import { DocsIndex } from './docs/docs-index.js';
 import { logger } from './logging/logger.js';
 import { ALL_TOOLS } from './tools/index.js';
 import type { RegisterableTool } from './tools/registry.js';
@@ -29,10 +30,13 @@ export function createServer(config: ServerConfig): McpServer {
   );
 
   const bridge = new HammerspoonBridge({ hsPathOverride: config.hsPathOverride });
+  // Parsed lazily on first search, so startup stays fast and a missing docs
+  // file only affects the one tool that needs it.
+  const docs = new DocsIndex(config.docsPathOverride);
   const tools = selectTools(config.exposure);
 
   for (const tool of tools) {
-    tool.register(server, { bridge });
+    tool.register(server, { bridge, docs });
   }
 
   logger.info(

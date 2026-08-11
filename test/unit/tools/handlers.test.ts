@@ -10,6 +10,7 @@ import { describe, expect, it, vi } from 'vitest';
 
 import type { HammerspoonBridge } from '../../../src/bridge/bridge.js';
 import type { BridgeResult } from '../../../src/bridge/errors.js';
+import { DocsIndex } from '../../../src/docs/docs-index.js';
 import { ALL_TOOLS } from '../../../src/tools/index.js';
 import type { ToolContext } from '../../../src/tools/registry.js';
 
@@ -52,12 +53,28 @@ function handlerFor(name: string, context: ToolContext) {
   return captured;
 }
 
+const stubDocs = new DocsIndex('/nonexistent/docs.json');
 const SUCCESS: BridgeResult<unknown> = { ok: true, value: { fine: true } };
 
+/**
+ * hs_api_search reads the bundled documentation from disk instead of talking
+ * to Hammerspoon, so the bridge-shaped assertions below do not apply to it. It
+ * is named here rather than filtered silently, so adding another bridge-free
+ * tool is a deliberate act.
+ */
+const BRIDGE_FREE_TOOLS = new Set(['hs_api_search']);
+const BRIDGE_TOOLS = ALL_TOOLS.filter((tool) => !BRIDGE_FREE_TOOLS.has(tool.name)).map(
+  (tool) => tool.name
+);
+
 describe('every tool', () => {
-  it.each(ALL_TOOLS.map((tool) => tool.name))('%s runs a static Lua program', async (name) => {
+  it('accounts for every registered tool', () => {
+    expect(BRIDGE_TOOLS.length + BRIDGE_FREE_TOOLS.size).toBe(ALL_TOOLS.length);
+  });
+
+  it.each(BRIDGE_TOOLS)('%s runs a static Lua program', async (name) => {
     const { bridge, calls } = fakeBridge(SUCCESS);
-    const handler = handlerFor(name, { bridge });
+    const handler = handlerFor(name, { bridge, docs: stubDocs });
 
     // Arguments that satisfy every schema in the set.
     await handler(
@@ -73,7 +90,7 @@ describe('every tool', () => {
     expect(lua).not.toContain('return 1\n');
   });
 
-  it.each(ALL_TOOLS.map((tool) => tool.name))(
+  it.each(BRIDGE_TOOLS)(
     '%s surfaces a bridge failure as an error result with a hint',
     async (name) => {
       const failure: BridgeResult<unknown> = {
@@ -85,7 +102,7 @@ describe('every tool', () => {
         },
       };
       const { bridge } = fakeBridge(failure);
-      const result = await handlerFor(name, { bridge })(
+      const result = await handlerFor(name, { bridge, docs: stubDocs })(
         { id: 1, text: 'hi', name: 'Safari', code: 'return 1', lines: 5, timeoutMs: 1000 },
         {}
       );
@@ -100,19 +117,25 @@ describe('every tool', () => {
 describe('argument routing', () => {
   it('hs_list_windows forwards its filter to the Lua side', async () => {
     const { bridge, calls } = fakeBridge(SUCCESS);
-    await handlerFor('hs_list_windows', { bridge })({ app: 'Ghostty' }, {});
+    await handlerFor('hs_list_windows', { bridge, docs: stubDocs })({ app: 'Ghostty' }, {});
     expect(calls[0]?.args).toMatchObject({ app: 'Ghostty' });
   });
 
   it('hs_move_window forwards only the coordinates it was given', async () => {
     const { bridge, calls } = fakeBridge(SUCCESS);
-    await handlerFor('hs_move_window', { bridge })({ id: 7, x: 100, width: 640 }, {});
+    await handlerFor('hs_move_window', { bridge, docs: stubDocs })(
+      { id: 7, x: 100, width: 640 },
+      {}
+    );
     expect(calls[0]?.args).toMatchObject({ id: 7, x: 100, width: 640 });
   });
 
   it('hs_eval sends only the code, and applies the caller timeout', async () => {
     const { bridge, calls } = fakeBridge(SUCCESS);
-    await handlerFor('hs_eval', { bridge })({ code: 'return 42', timeoutMs: 2500 }, {});
+    await handlerFor('hs_eval', { bridge, docs: stubDocs })(
+      { code: 'return 42', timeoutMs: 2500 },
+      {}
+    );
 
     // The timeout is transport configuration, not something Lua should see.
     expect(calls[0]?.args).toEqual({ code: 'return 42' });
@@ -124,15 +147,77 @@ describe('argument routing', () => {
 
   it('hs_health annotates the result with the resolved binary path', async () => {
     const { bridge } = fakeBridge({ ok: true, value: { hammerspoonVersion: '1.0.0' } });
-    const result = await handlerFor('hs_health', { bridge })({}, {});
+    const result = await handlerFor('hs_health', { bridge, docs: stubDocs })({}, {});
     expect(result.content[0]?.text).toContain('/fake/hs');
     expect(result.content[0]?.text).toContain('1.0.0');
   });
 
   it('hs_reload_config explains the consequences instead of echoing raw output', async () => {
     const { bridge } = fakeBridge({ ok: true, value: { scheduled: true } });
-    const result = await handlerFor('hs_reload_config', { bridge })({}, {});
+    const result = await handlerFor('hs_reload_config', { bridge, docs: stubDocs })({}, {});
     expect(result.isError).not.toBe(true);
     expect(result.content[0]?.text).toContain('hs.ipc');
+  });
+});
+
+describe('hs_api_search', () => {
+  const realDocs = new DocsIndex(new URL('../../fixtures/docs.json', import.meta.url).pathname);
+
+  const search = async (args: Record<string, unknown>) => {
+    const { bridge, calls } = fakeBridge(SUCCESS);
+    const result = await handlerFor('hs_api_search', { bridge, docs: realDocs })(args, {});
+    return { result, calls };
+  };
+
+  it('answers without touching Hammerspoon, so it works while it is closed', async () => {
+    const { result, calls } = await search({ query: 'setFrame', limit: 10 });
+    expect(calls).toHaveLength(0);
+    expect(result.isError).not.toBe(true);
+  });
+
+  it('returns the qualified name and exact signature', async () => {
+    const { result } = await search({ query: 'setFrame', limit: 10 });
+    const payload = JSON.parse(result.content[0]?.text ?? '{}') as {
+      results: { qualifiedName: string; signature: string; kind: string }[];
+    };
+    expect(payload.results[0]).toMatchObject({
+      qualifiedName: 'hs.window.setFrame',
+      kind: 'Method',
+    });
+    expect(payload.results[0]?.signature).toContain('setFrame(rect');
+  });
+
+  it('reports the total separately from the page it returned', async () => {
+    const { result } = await search({ query: 'hs', limit: 2 });
+    const payload = JSON.parse(result.content[0]?.text ?? '{}') as {
+      totalMatches: number;
+      showing: number;
+    };
+    expect(payload.showing).toBe(2);
+    expect(payload.totalMatches).toBeGreaterThan(2);
+  });
+
+  it('honours the module filter', async () => {
+    const { result } = await search({ query: 'show', module: 'alert', limit: 10 });
+    const payload = JSON.parse(result.content[0]?.text ?? '{}') as {
+      results: { module: string }[];
+    };
+    expect(payload.results.every((hit) => hit.module === 'hs.alert')).toBe(true);
+  });
+
+  it('suggests how to widen the search when nothing matches', async () => {
+    const { result } = await search({ query: 'nonexistentapithing', limit: 10 });
+    expect(result.isError).toBe(true);
+    expect(result.content[0]?.text).toContain('No documentation matched');
+  });
+
+  it('surfaces a missing documentation file with the override hint', async () => {
+    const { bridge } = fakeBridge(SUCCESS);
+    const result = await handlerFor('hs_api_search', { bridge, docs: stubDocs })(
+      { query: 'anything', limit: 10 },
+      {}
+    );
+    expect(result.isError).toBe(true);
+    expect(result.content[0]?.text).toContain('HS_MCP_DOCS_PATH');
   });
 });

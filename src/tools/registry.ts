@@ -16,11 +16,14 @@ import type { z } from 'zod';
 
 import type { HammerspoonBridge } from '../bridge/bridge.js';
 import { formatBridgeError, type BridgeResult } from '../bridge/errors.js';
+import type { DocsIndex } from '../docs/docs-index.js';
 
 export type ToolTier = 'safe' | 'unsafe';
 
 export type ToolContext = {
   readonly bridge: HammerspoonBridge;
+  /** Hammerspoon's bundled API reference. Read directly, never through the bridge. */
+  readonly docs: DocsIndex;
 };
 
 export type ToolDefinition<TShape extends z.ZodRawShape> = {

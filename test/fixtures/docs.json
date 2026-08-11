@@ -1,0 +1,60 @@
+[
+  {
+    "name": "hs.window",
+    "desc": "Inspect and manipulate windows",
+    "doc": "Inspect and manipulate windows\n\nLonger prose about windows.",
+    "items": [
+      {
+        "name": "setFrame",
+        "signature": "hs.window:setFrame(rect[, duration]) -> hs.window object",
+        "def": "hs.window:setFrame(rect)",
+        "type": "Method",
+        "desc": "Sets the frame of the window in absolute coordinates",
+        "doc": "Sets the frame of the window in absolute coordinates\n\nMore detail."
+      },
+      {
+        "name": "allWindows",
+        "signature": "hs.window.allWindows() -> list of hs.window objects",
+        "type": "Function",
+        "desc": "Returns all windows",
+        "doc": "Returns all windows"
+      },
+      {
+        "name": "focusedWindow",
+        "def": "hs.window.focusedWindow() -> hs.window object",
+        "type": "Constructor",
+        "doc": "Returns the window that has keyboard focus\n\nSecond paragraph ignored."
+      }
+    ]
+  },
+  {
+    "name": "hs.screen",
+    "desc": "Manipulate screens",
+    "items": [
+      {
+        "name": "mainScreen",
+        "signature": "hs.screen.mainScreen() -> screen",
+        "type": "Function",
+        "desc": "Returns the screen containing the focused window"
+      }
+    ]
+  },
+  {
+    "name": "hs.alert",
+    "desc": "Simple on-screen alerts",
+    "items": [
+      {
+        "name": "show",
+        "signature": "hs.alert.show(str, seconds) -> uuid",
+        "type": "Function",
+        "desc": "Shows a message in large words briefly on screen"
+      }
+    ]
+  },
+  { "name": "", "desc": "module with no name is skipped", "items": [] },
+  {
+    "name": "hs.broken",
+    "desc": "Module whose items are malformed",
+    "items": [{ "type": "Function", "desc": "item with no name is skipped" }]
+  }
+]

@@ -12,6 +12,7 @@
 import { describe, expect, it } from 'vitest';
 
 import { HammerspoonBridge } from '../../src/bridge/bridge.js';
+import { DocsIndex } from '../../src/docs/docs-index.js';
 import { ALL_TOOLS } from '../../src/tools/index.js';
 
 const bridge = new HammerspoonBridge();
@@ -83,7 +84,7 @@ describe.skipIf(!available)('tool Lua executes against real Hammerspoon', () => 
         captured = handler;
       },
     };
-    tool?.register(fakeServer as never, { bridge });
+    tool?.register(fakeServer as never, { bridge, docs: new DocsIndex() });
 
     const handler = captured as (a: unknown, c: unknown) => Promise<{ isError?: boolean }>;
     return handler(args, {});

@@ -9,9 +9,11 @@ import {
   textResult,
 } from '../../../src/tools/registry.js';
 import type { HammerspoonBridge } from '../../../src/bridge/bridge.js';
+import { DocsIndex } from '../../../src/docs/docs-index.js';
 
 import type { McpServer } from '@modelcontextprotocol/server';
 
+const stubDocs = new DocsIndex('/nonexistent/docs.json');
 const stubBridge = { hsPath: '/fake/hs', run: vi.fn() } as unknown as HammerspoonBridge;
 
 /**
@@ -35,7 +37,7 @@ describe('defineTool', () => {
       handler: async () => Promise.resolve(textResult('ok')),
     });
 
-    tool.register(stubServer(registerTool), { bridge: stubBridge });
+    tool.register(stubServer(registerTool), { bridge: stubBridge, docs: stubDocs });
 
     expect(registerTool).toHaveBeenCalledTimes(1);
     const [name, config] = registerTool.mock.calls[0] as [string, Record<string, unknown>];
@@ -54,7 +56,7 @@ describe('defineTool', () => {
       description: 'No annotations.',
       inputSchema: z.object({}),
       handler: async () => Promise.resolve(textResult('ok')),
-    }).register(stubServer(registerTool), { bridge: stubBridge });
+    }).register(stubServer(registerTool), { bridge: stubBridge, docs: stubDocs });
 
     const [, config] = registerTool.mock.calls[0] as [string, Record<string, unknown>];
     expect('annotations' in config).toBe(false);
@@ -70,7 +72,7 @@ describe('defineTool', () => {
       inputSchema: z.object({}),
       annotations: { readOnlyHint: true },
       handler: async () => Promise.resolve(textResult('ok')),
-    }).register(stubServer(registerTool), { bridge: stubBridge });
+    }).register(stubServer(registerTool), { bridge: stubBridge, docs: stubDocs });
 
     const [, config] = registerTool.mock.calls[0] as [string, Record<string, unknown>];
     expect(config['annotations']).toEqual({ readOnlyHint: true });
@@ -88,7 +90,7 @@ describe('defineTool', () => {
     });
     expect(tool.tier).toBe('unsafe');
 
-    tool.register(stubServer(registerTool), { bridge: stubBridge });
+    tool.register(stubServer(registerTool), { bridge: stubBridge, docs: stubDocs });
     const [, config] = registerTool.mock.calls[0] as [string, Record<string, unknown>];
     // The tier governs whether we register at all. It is not part of the wire
     // contract, so it must not leak into the tool description.
@@ -105,7 +107,7 @@ describe('defineTool', () => {
       description: 'Checks context.',
       inputSchema: z.object({ a: z.string() }),
       handler,
-    }).register(stubServer(registerTool), { bridge: stubBridge });
+    }).register(stubServer(registerTool), { bridge: stubBridge, docs: stubDocs });
 
     const registered = registerTool.mock.calls[0]?.[2] as (
       a: unknown,
@@ -113,7 +115,7 @@ describe('defineTool', () => {
     ) => Promise<unknown>;
     await registered({ a: 'x' }, {});
 
-    expect(handler).toHaveBeenCalledWith({ a: 'x' }, { bridge: stubBridge });
+    expect(handler).toHaveBeenCalledWith({ a: 'x' }, { bridge: stubBridge, docs: stubDocs });
   });
 });
 

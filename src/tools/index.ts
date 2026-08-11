@@ -1,3 +1,4 @@
+import { apiSearchTool } from './safe/api-search.js';
 import { focusAppTool, launchAppTool, listAppsTool } from './safe/apps.js';
 import { healthTool } from './safe/health.js';
 import { consoleTailTool, notifyTool, reloadConfigTool, screensTool } from './safe/system.js';
@@ -12,6 +13,7 @@ import type { RegisterableTool } from './registry.js';
  */
 export const ALL_TOOLS: readonly RegisterableTool[] = [
   healthTool,
+  apiSearchTool,
   listWindowsTool,
   focusWindowTool,
   moveWindowTool,
