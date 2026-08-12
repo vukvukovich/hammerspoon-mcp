@@ -130,10 +130,37 @@ describe.skipIf(!available)('tool Lua executes against real Hammerspoon', () => 
     ['hs_wifi', {}],
     ['hs_keep_awake', {}],
     ['hs_list_shortcuts', {}],
-    ['hs_ui_inspect', { depth: 2, limit: 40 }],
+    ['hs_music_status', {}],
+    ['hs_list_voices', {}],
+    ['hs_network', {}],
+    ['hs_caps_lock', {}],
+    ['hs_default_browser', {}],
+    ['hs_settings', { action: 'list' }],
   ])('%s succeeds', async (name, args) => {
     const result = await runTool(name, args);
     expect(result.isError).not.toBe(true);
+  });
+
+  // Targets Hammerspoon explicitly rather than the frontmost app. Whatever
+  // happens to be focused when the suite runs is ambient state, and a window
+  // without an accessibility tree (or one that vanished) made this fail only
+  // inside the suite and never standalone.
+  it('hs_ui_inspect reads a named application', async () => {
+    const result = (await runTool('hs_ui_inspect', {
+      app: 'Hammerspoon',
+      depth: 2,
+      limit: 40,
+    })) as unknown as { isError?: boolean; content: { text: string }[] };
+
+    expect(result.isError).not.toBe(true);
+    const payload = JSON.parse(result.content[0]?.text ?? '{}') as {
+      app: string;
+      tree?: { role?: string };
+    };
+    expect(payload.app).toBe('Hammerspoon');
+    expect(payload.tree?.role).toBe('AXApplication');
+    // Structure only: text field contents must never be reported.
+    expect(result.content[0]?.text).not.toContain('"value"');
   });
 
   // Read-modify-restore, so the suite leaves the machine as it found it.
@@ -152,6 +179,38 @@ describe.skipIf(!available)('tool Lua executes against real Hammerspoon', () => 
       await runTool('hs_audio_volume', { volume: before.volume, direction: 'output' });
     }
     expect((await read()).volume).toBeCloseTo(before.volume, 0);
+  });
+
+  // Namespacing is a safety property, not a convenience: an unprefixed key
+  // could overwrite something the user's own config depends on.
+  it('hs_settings round-trips and stays inside its namespace', async () => {
+    const read = async (): Promise<string> =>
+      (
+        (await runTool('hs_settings', {
+          action: 'get',
+          key: 'integration-probe',
+        })) as unknown as { content: { text: string }[] }
+      ).content[0]?.text ?? '';
+
+    try {
+      await runTool('hs_settings', { action: 'set', key: 'integration-probe', value: 'v1' });
+      expect(await read()).toContain('v1');
+    } finally {
+      await runTool('hs_settings', { action: 'delete', key: 'integration-probe' });
+    }
+    expect(await read()).not.toContain('v1');
+
+    // The listing must never surface a key this tool did not write.
+    const listed =
+      (
+        (await runTool('hs_settings', { action: 'list' })) as unknown as {
+          content: { text: string }[];
+        }
+      ).content[0]?.text ?? '{}';
+    const parsed = JSON.parse(listed) as { settings: { key: string }[] };
+    for (const entry of parsed.settings) {
+      expect(entry.key).not.toContain('hsmcp.');
+    }
   });
 
   it('hs_audio_set_device lists the alternatives when nothing matches', async () => {

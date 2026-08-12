@@ -28,6 +28,68 @@ function rejectsWith(error: Error): ExecFn {
   return () => Promise.reject(error);
 }
 
+/**
+ * Concurrency is a correctness property here, not a performance one.
+ *
+ * Each hs invocation opens its own CFMessagePort. Measured against a real
+ * Hammerspoon: 8 simultaneous calls all succeed in milliseconds, 15 drop to 5
+ * successes with exit codes 65 and 69, and the same pattern crashed
+ * Hammerspoon inside its own IPC layer. MCP clients issue parallel tool calls
+ * routinely, so the bridge caps how many run at once.
+ */
+describe('concurrency gate', () => {
+  it('never runs more than the limit at once, however many are requested', async () => {
+    let active = 0;
+    let peak = 0;
+
+    const exec: ExecFn = async () => {
+      active += 1;
+      peak = Math.max(peak, active);
+      await new Promise((resolve) => setTimeout(resolve, 5));
+      active -= 1;
+      return { stdout: `${'x'}`, stderr: '' };
+    };
+
+    const bridge = new HammerspoonBridge({ hsPathOverride: FAKE_HS, exec });
+    await Promise.all(Array.from({ length: 30 }, async () => bridge.run(lua`return 1`)));
+
+    expect(peak).toBeGreaterThan(1); // still overlaps, not fully serialised
+    expect(peak).toBeLessThanOrEqual(4);
+  });
+
+  it('runs every queued call rather than dropping any', async () => {
+    let started = 0;
+    const exec: ExecFn = async () => {
+      started += 1;
+      await new Promise((resolve) => setTimeout(resolve, 2));
+      return { stdout: '', stderr: '' };
+    };
+
+    const bridge = new HammerspoonBridge({ hsPathOverride: FAKE_HS, exec });
+    await Promise.all(Array.from({ length: 25 }, async () => bridge.run(lua`return 1`)));
+
+    expect(started).toBe(25);
+  });
+
+  it('releases its slot when a call fails, so a failure cannot wedge the queue', async () => {
+    let calls = 0;
+    const exec: ExecFn = async () => {
+      calls += 1;
+      // Every one rejects. If the gate leaked slots, later calls would hang
+      // and this test would time out rather than fail.
+      return Promise.reject(Object.assign(new Error('boom'), { stderr: '' }));
+    };
+
+    const bridge = new HammerspoonBridge({ hsPathOverride: FAKE_HS, exec });
+    const results = await Promise.all(
+      Array.from({ length: 12 }, async () => bridge.run(lua`return 1`))
+    );
+
+    expect(calls).toBe(12);
+    expect(results.every((result) => !result.ok)).toBe(true);
+  });
+});
+
 describe('HammerspoonBridge.run', () => {
   it('returns the decoded value on success', async () => {
     const bridge = bridgeWith(stdout('{"ok":true,"value":{"count":2}}'));

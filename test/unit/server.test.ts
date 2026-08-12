@@ -57,8 +57,12 @@ describe('tool inventory', () => {
     // application, which can mean pressing Send, Delete, or Allow on a
     // security prompt. Reading the UI tree stays in the safe tier, because
     // inspection is not action.
+    //
+    // hs_applescript is arbitrary code execution too. It reads like English,
+    // which makes it feel tamer than hs_eval, but it reaches every scriptable
+    // application and can call `do shell script`. Same tier.
     const gated = names(ALL_TOOLS.filter((tool) => tool.tier === 'unsafe'));
-    expect(gated).toEqual(['hs_eval', 'hs_ui_press']);
+    expect(gated).toEqual(['hs_eval', 'hs_ui_press', 'hs_applescript']);
   });
 
   it('never exposes a shell execution tool, at any tier', () => {

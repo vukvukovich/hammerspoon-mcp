@@ -41,6 +41,65 @@ const MAX_OUTPUT_BYTES = 8 * 1024 * 1024;
 const SIGKILL_GRACE_MS = 2000;
 
 /**
+ * Ceiling on `hs` processes in flight at once, across every bridge instance.
+ *
+ * Each invocation opens its own CFMessagePort to Hammerspoon, and that channel
+ * does not cope with churn. Measured on a real machine: up to 8 concurrent
+ * calls all succeed in tens of milliseconds, 10 succeed but take 1.4 seconds,
+ * 15 drop to 5 successes with exit codes 65 and 69, and 20 drop to 12. Worse,
+ * this same pattern crashed Hammerspoon twice inside its own IPC layer
+ * (EXC_BREAKPOINT in CFMessagePortSendRequest).
+ *
+ * MCP clients issue parallel tool calls as a matter of course, so without a
+ * gate here a client asking three questions at once is already at risk and a
+ * client asking twenty will lose most of them.
+ *
+ * Serialising entirely would be defensible, because Hammerspoon runs Lua on
+ * its main thread and cannot truly execute two calls at once anyway. A small
+ * limit is chosen instead so process startup still overlaps, which is the only
+ * part that genuinely parallelises. Four sits far below the level where any
+ * degradation was observed.
+ */
+const MAX_CONCURRENT_CALLS = 4;
+
+/**
+ * Minimal FIFO gate. Deliberately not a dependency: the whole contract is
+ * "no more than N at once, in arrival order", and a queue of resolvers
+ * expresses that in a dozen lines.
+ */
+class ConcurrencyGate {
+  #active = 0;
+  readonly #waiting: (() => void)[] = [];
+  readonly #limit: number;
+
+  // A parameter property would be neater, but tsconfig sets
+  // erasableSyntaxOnly so that Node can strip types without transforming.
+  constructor(limit: number) {
+    this.#limit = limit;
+  }
+
+  async run<TResult>(task: () => Promise<TResult>): Promise<TResult> {
+    if (this.#active >= this.#limit) {
+      await new Promise<void>((resolve) => this.#waiting.push(resolve));
+    }
+    this.#active += 1;
+    try {
+      return await task();
+    } finally {
+      this.#active -= 1;
+      // Waking exactly one keeps arrival order and cannot overshoot the limit.
+      this.#waiting.shift()?.();
+    }
+  }
+}
+
+/**
+ * Shared, not per-instance. The constraint is the single Hammerspoon process
+ * every bridge talks to, so two bridge objects must still respect one budget.
+ */
+const callGate = new ConcurrencyGate(MAX_CONCURRENT_CALLS);
+
+/**
  * Signatures of "Hammerspoon is not listening" as opposed to "Lua raised".
  * The exact wording has changed across Hammerspoon versions, so several
  * phrasings are matched rather than one exact string.
@@ -251,13 +310,21 @@ export class HammerspoonBridge {
     const marker = newResultMarker();
     const program = buildProgram(luaBody, encoded.value, marker);
     const timeoutMs = options.timeoutMs ?? this.#defaultTimeoutMs;
+    // Captured before the closure below, which cannot carry the narrowing
+    // from the found check above.
+    const hsPath = this.#lookup.path;
 
     let raw: ExecResult;
     try {
-      raw = await this.#exec(this.#lookup.path, ['-c', program], {
-        timeout: timeoutMs,
-        maxBuffer: MAX_OUTPUT_BYTES,
-      });
+      // Gated: too many simultaneous hs processes overwhelm Hammerspoon's IPC
+      // channel and start failing outright. Queued calls still get their full
+      // timeout once they start, since the clock is inside the task.
+      raw = await callGate.run(async () =>
+        this.#exec(hsPath, ['-c', program], {
+          timeout: timeoutMs,
+          maxBuffer: MAX_OUTPUT_BYTES,
+        })
+      );
     } catch (cause) {
       return { ok: false, error: this.#classifyExecFailure(cause, timeoutMs) };
     }

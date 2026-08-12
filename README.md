@@ -158,7 +158,7 @@ found, whether Hammerspoon is running, and whether `hs.ipc` answered.
 
 ## Tool reference
 
-Thirty-one tools: twenty-nine in the safe tier, two gated.
+Forty-one tools: thirty-eight in the safe tier, three gated.
 
 | Tool                  | Tier   | What it does                                                                        |
 | --------------------- | ------ | ----------------------------------------------------------------------------------- |
@@ -192,6 +192,7 @@ Positions are computed from the screen's usable frame, so they respect the menu
 bar and the Dock, and they work on a second monitor whose origin is negative.
 
 | `hs_ui_press` | unsafe | Press a UI element found by `hs_ui_inspect`. Requires `HS_MCP_TOOLS=all`. |
+| `hs_applescript` | unsafe | Run AppleScript. Reaches Mail, Notes, Reminders, Finder. Requires `HS_MCP_TOOLS=all`. |
 
 `hs_ui_inspect` returns structure and labels only, never the contents of text
 fields or documents. Structure is what an agent needs in order to act; contents

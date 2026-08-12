@@ -119,10 +119,10 @@ try {
       !names.includes('hs_eval') && !names.includes('hs_ui_press'),
       names.join(', ')
     );
-    check('safe tier exposes 29 tools', tools.length === 29, `got ${tools.length}`);
+    check('safe tier exposes 38 tools', tools.length === 38, `got ${tools.length}`);
   } else {
     check('hs_eval is present when unlocked', names.includes('hs_eval'));
-    check('all tier exposes 31 tools', tools.length === 31, `got ${tools.length}`);
+    check('all tier exposes 41 tools', tools.length === 41, `got ${tools.length}`);
   }
 
   const health = await send('tools/call', { name: 'hs_health', arguments: {} });
