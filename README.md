@@ -158,24 +158,32 @@ found, whether Hammerspoon is running, and whether `hs.ipc` answered.
 
 ## Tool reference
 
-Fourteen tools: thirteen in the safe tier, one gated.
+Twenty-two tools: twenty-one in the safe tier, one gated.
 
-| Tool               | Tier   | What it does                                                                        |
-| ------------------ | ------ | ----------------------------------------------------------------------------------- |
-| `hs_health`        | safe   | Report bridge status: resolved `hs` path, whether Hammerspoon answers, its version. |
-| `hs_api_search`    | safe   | Search Hammerspoon's bundled API reference and return exact signatures.             |
-| `hs_console_tail`  | safe   | Return the last N lines of the Hammerspoon console.                                 |
-| `hs_reload_config` | safe   | Reload `~/.hammerspoon/init.lua`.                                                   |
-| `hs_notify`        | safe   | Show a transient on-screen alert, without stealing focus.                           |
-| `hs_list_windows`  | safe   | List windows, with id, title, owning app, screen, and frame.                        |
-| `hs_focus_window`  | safe   | Focus a window by id, or by a substring of its title.                               |
-| `hs_move_window`   | safe   | Move or resize a window by id, in absolute screen pixels.                           |
-| `hs_window_layout` | safe   | Snap a window to a named preset such as `left-half` or `quarter-top-left`.          |
-| `hs_list_apps`     | safe   | List running applications, with bundle id, PID, and window count.                   |
-| `hs_launch_app`    | safe   | Launch an application by name, or focus it if it is already running.                |
-| `hs_focus_app`     | safe   | Bring an already-running application to the front.                                  |
-| `hs_screens`       | safe   | List screens, with id, name, frame, and which one is primary.                       |
-| `hs_eval`          | unsafe | Evaluate arbitrary Lua. Requires `HS_MCP_TOOLS=all`.                                |
+| Tool                  | Tier   | What it does                                                                        |
+| --------------------- | ------ | ----------------------------------------------------------------------------------- |
+| `hs_health`           | safe   | Report bridge status: resolved `hs` path, whether Hammerspoon answers, its version. |
+| `hs_api_search`       | safe   | Search Hammerspoon's bundled API reference and return exact signatures.             |
+| `hs_console_tail`     | safe   | Return the last N lines of the Hammerspoon console.                                 |
+| `hs_reload_config`    | safe   | Reload `~/.hammerspoon/init.lua`.                                                   |
+| `hs_notify`           | safe   | Show a transient on-screen alert, without stealing focus.                           |
+| `hs_list_windows`     | safe   | List windows, with id, title, owning app, screen, and frame.                        |
+| `hs_focus_window`     | safe   | Focus a window by id, or by a substring of its title.                               |
+| `hs_move_window`      | safe   | Move or resize a window by id, in absolute screen pixels.                           |
+| `hs_window_layout`    | safe   | Snap a window to a named preset such as `left-half` or `quarter-top-left`.          |
+| `hs_list_apps`        | safe   | List running applications, with bundle id, PID, and window count.                   |
+| `hs_launch_app`       | safe   | Launch an application by name, or focus it if it is already running.                |
+| `hs_focus_app`        | safe   | Bring an already-running application to the front.                                  |
+| `hs_screens`          | safe   | List screens, with id, name, frame, and which one is primary.                       |
+| `hs_machine_status`   | safe   | Battery, brightness, wifi, idle time, audio, and host info in one call.             |
+| `hs_audio_devices`    | safe   | List audio output and input devices, showing the current default.                   |
+| `hs_audio_set_device` | safe   | Switch the default output or input device, for example to headphones.               |
+| `hs_audio_volume`     | safe   | Get or set volume and mute on the default device.                                   |
+| `hs_brightness`       | safe   | Get or set built-in display brightness.                                             |
+| `hs_media_control`    | safe   | Play, pause, skip, or go back, via system media keys.                               |
+| `hs_list_spaces`      | safe   | List desktops (Spaces) per screen, with positions and which is current.             |
+| `hs_goto_space`       | safe   | Switch desktop by id or by 1-based position.                                        |
+| `hs_eval`             | unsafe | Evaluate arbitrary Lua. Requires `HS_MCP_TOOLS=all`.                                |
 
 `hs_window_layout` presets: `left-half`, `right-half`, `top-half`, `bottom-half`,
 `maximize`, `center`, `thirds-left`, `thirds-center`, `thirds-right`,

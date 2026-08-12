@@ -121,9 +121,56 @@ describe.skipIf(!available)('tool Lua executes against real Hammerspoon', () => 
     ['hs_list_apps', {}],
     ['hs_screens', {}],
     ['hs_console_tail', { lines: 5 }],
+    ['hs_machine_status', {}],
+    ['hs_audio_devices', {}],
+    ['hs_audio_volume', {}],
+    ['hs_brightness', {}],
+    ['hs_list_spaces', {}],
   ])('%s succeeds', async (name, args) => {
     const result = await runTool(name, args);
     expect(result.isError).not.toBe(true);
+  });
+
+  // Read-modify-restore, so the suite leaves the machine as it found it.
+  it('hs_audio_volume round-trips a change', async () => {
+    const read = async (): Promise<{ volume: number }> =>
+      JSON.parse(
+        ((await runTool('hs_audio_volume', {})) as unknown as { content: { text: string }[] })
+          .content[0]?.text ?? '{}'
+      ) as { volume: number };
+
+    const before = await read();
+    try {
+      await runTool('hs_audio_volume', { volume: 40, direction: 'output' });
+      expect((await read()).volume).toBeCloseTo(40, 0);
+    } finally {
+      await runTool('hs_audio_volume', { volume: before.volume, direction: 'output' });
+    }
+    expect((await read()).volume).toBeCloseTo(before.volume, 0);
+  });
+
+  it('hs_audio_set_device lists the alternatives when nothing matches', async () => {
+    const result = await runTool('hs_audio_set_device', { name: 'no-such-device-xyz' });
+    expect(result.isError).toBe(true);
+  });
+
+  it('hs_goto_space recognises the space it is already on', async () => {
+    const listed = (await runTool('hs_list_spaces', {})) as unknown as {
+      content: { text: string }[];
+    };
+    const spaces = JSON.parse(listed.content[0]?.text ?? '[]') as {
+      id: number;
+      isCurrent: boolean;
+    }[];
+    const current = spaces.find((space) => space.isCurrent);
+    expect(current).toBeDefined();
+    if (!current) return;
+
+    const result = (await runTool('hs_goto_space', {
+      id: current.id,
+    })) as unknown as { isError?: boolean; content: { text: string }[] };
+    expect(result.isError).not.toBe(true);
+    expect(result.content[0]?.text).toContain('alreadyThere');
   });
 
   it('hs_list_windows returns usable window ids', async () => {
