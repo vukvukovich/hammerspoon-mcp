@@ -126,6 +126,10 @@ describe.skipIf(!available)('tool Lua executes against real Hammerspoon', () => 
     ['hs_audio_volume', {}],
     ['hs_brightness', {}],
     ['hs_list_spaces', {}],
+    ['hs_peripherals', {}],
+    ['hs_wifi', {}],
+    ['hs_keep_awake', {}],
+    ['hs_list_shortcuts', {}],
   ])('%s succeeds', async (name, args) => {
     const result = await runTool(name, args);
     expect(result.isError).not.toBe(true);

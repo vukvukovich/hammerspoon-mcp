@@ -158,7 +158,7 @@ found, whether Hammerspoon is running, and whether `hs.ipc` answered.
 
 ## Tool reference
 
-Twenty-two tools: twenty-one in the safe tier, one gated.
+Twenty-nine tools: twenty-eight in the safe tier, one gated.
 
 | Tool                  | Tier   | What it does                                                                        |
 | --------------------- | ------ | ----------------------------------------------------------------------------------- |

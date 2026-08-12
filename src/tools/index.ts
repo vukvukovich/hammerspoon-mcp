@@ -1,6 +1,9 @@
 import { apiSearchTool } from './safe/api-search.js';
 import { audioDevicesTool, audioSetDeviceTool, audioVolumeTool } from './safe/audio.js';
 import { brightnessTool, machineStatusTool, mediaControlTool } from './safe/machine.js';
+import { notifyCenterTool, peripheralsTool, wifiTool } from './safe/hardware.js';
+import { caffeinateTool, lockScreenTool } from './safe/session.js';
+import { listShortcutsTool, runShortcutTool } from './safe/shortcuts.js';
 import { gotoSpaceTool, listSpacesTool } from './safe/spaces.js';
 import { windowLayoutTool } from './safe/layout.js';
 import { focusAppTool, launchAppTool, listAppsTool } from './safe/apps.js';
@@ -34,6 +37,13 @@ export const ALL_TOOLS: readonly RegisterableTool[] = [
   brightnessTool,
   mediaControlTool,
   machineStatusTool,
+  peripheralsTool,
+  wifiTool,
+  notifyCenterTool,
+  caffeinateTool,
+  lockScreenTool,
+  listShortcutsTool,
+  runShortcutTool,
   consoleTailTool,
   notifyTool,
   reloadConfigTool,
