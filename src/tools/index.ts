@@ -1,3 +1,4 @@
+import { inspectUiTool } from './safe/accessibility.js';
 import { apiSearchTool } from './safe/api-search.js';
 import { audioDevicesTool, audioSetDeviceTool, audioVolumeTool } from './safe/audio.js';
 import { brightnessTool, machineStatusTool, mediaControlTool } from './safe/machine.js';
@@ -11,6 +12,7 @@ import { healthTool } from './safe/health.js';
 import { consoleTailTool, notifyTool, reloadConfigTool, screensTool } from './safe/system.js';
 import { focusWindowTool, listWindowsTool, moveWindowTool } from './safe/windows.js';
 import { evalTool } from './unsafe/eval.js';
+import { pressUiTool } from './unsafe/ui-press.js';
 import type { RegisterableTool } from './registry.js';
 
 /**
@@ -44,8 +46,10 @@ export const ALL_TOOLS: readonly RegisterableTool[] = [
   lockScreenTool,
   listShortcutsTool,
   runShortcutTool,
+  inspectUiTool,
   consoleTailTool,
   notifyTool,
   reloadConfigTool,
   evalTool,
+  pressUiTool,
 ];

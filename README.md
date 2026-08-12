@@ -158,7 +158,7 @@ found, whether Hammerspoon is running, and whether `hs.ipc` answered.
 
 ## Tool reference
 
-Twenty-nine tools: twenty-eight in the safe tier, one gated.
+Thirty-one tools: twenty-nine in the safe tier, two gated.
 
 | Tool                  | Tier   | What it does                                                                        |
 | --------------------- | ------ | ----------------------------------------------------------------------------------- |
@@ -190,6 +190,12 @@ Twenty-nine tools: twenty-eight in the safe tier, one gated.
 `two-thirds-left`, `two-thirds-right`, and the four `quarter-*` corners.
 Positions are computed from the screen's usable frame, so they respect the menu
 bar and the Dock, and they work on a second monitor whose origin is negative.
+
+| `hs_ui_press` | unsafe | Press a UI element found by `hs_ui_inspect`. Requires `HS_MCP_TOOLS=all`. |
+
+`hs_ui_inspect` returns structure and labels only, never the contents of text
+fields or documents. Structure is what an agent needs in order to act; contents
+are what a password manager is made of.
 
 Tools in the `unsafe` tier are not registered at all unless you opt in. A client
 connected with default settings will not see `hs_eval` in its tool list.

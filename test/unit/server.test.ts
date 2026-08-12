@@ -50,8 +50,15 @@ describe('tool inventory', () => {
   // If another tool is ever marked unsafe, that is a deliberate decision that
   // should require updating this list.
   it('gates exactly the tools that are meant to be gated', () => {
+    // Adding to this list is a security decision, so it has to be made here
+    // deliberately rather than by writing tier: 'unsafe' in a tool file.
+    //
+    // hs_eval runs arbitrary Lua. hs_ui_press acts as the user in any
+    // application, which can mean pressing Send, Delete, or Allow on a
+    // security prompt. Reading the UI tree stays in the safe tier, because
+    // inspection is not action.
     const gated = names(ALL_TOOLS.filter((tool) => tool.tier === 'unsafe'));
-    expect(gated).toEqual(['hs_eval']);
+    expect(gated).toEqual(['hs_eval', 'hs_ui_press']);
   });
 
   it('never exposes a shell execution tool, at any tier', () => {
@@ -62,9 +69,14 @@ describe('tool inventory', () => {
     }
   });
 
-  it('never exposes input synthesis or screen capture, which are exfiltration primitives', () => {
-    for (const tool of ALL_TOOLS) {
-      expect(tool.name).not.toMatch(/type|keystroke|click|screenshot|clipboard/);
+  it('never exposes input synthesis or screen capture in the safe tier', () => {
+    // Blind typing and screen capture are exfiltration and escalation
+    // primitives, so they are absent everywhere. hs_ui_press is the one
+    // adjacent capability that exists, and it is gated: pressing a named
+    // element you just inspected is far more predictable than typing into
+    // whatever happens to be focused.
+    for (const tool of ALL_TOOLS.filter((candidate) => candidate.tier === 'safe')) {
+      expect(tool.name).not.toMatch(/type|keystroke|click|press|screenshot|clipboard/);
     }
   });
 });
