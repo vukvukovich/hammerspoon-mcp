@@ -376,6 +376,89 @@ Hammerspoon is single-threaded. A config stuck in a loop, or a modal dialog on
 screen, means calls do not return. The timeout is what turns that into a
 diagnosable error instead of an agent that appears to freeze.
 
+## Concurrency: calls are queued, four at a time
+
+MCP clients issue parallel tool calls as a matter of course. Ask an agent about
+audio, windows, and battery at once and it fires all three together. The bridge
+does not pass that concurrency straight through, and the reason is worth
+understanding before changing it.
+
+### Hammerspoon executes Lua strictly serially
+
+Not "mostly", not "usually". Measured against a real Hammerspoon, with a body
+that sleeps 400ms:
+
+| Calls            | Wall time |
+| ---------------- | --------- |
+| 1                | 417ms     |
+| 4 issued at once | 1629ms    |
+
+That is 4 x 407ms. No overlap whatsoever.
+
+Two reasons, both structural:
+
+- **One Lua state, and Lua states are not thread-safe.** Hammerspoon runs a
+  single interpreter, so it cannot be entered from two threads at once.
+- **The APIs call AppKit.** `hs.window`, `hs.screen`, and `hs.menubar` touch
+  Cocoa, which macOS pins to the main thread. Even a thread-safe Lua would have
+  to funnel this work back to one thread.
+
+So `hs.ipc` dispatches every message onto the main run loop and handles them one
+at a time. Twenty clients is twenty people queueing at one till.
+
+### Unbounded concurrency does not queue, it fails
+
+Serialisation on its own would only mean waiting. What actually happens is
+worse, because each invocation opens its own CFMessagePort and that channel
+does not tolerate churn:
+
+| Simultaneous `hs` calls | Result                        |
+| ----------------------- | ----------------------------- |
+| 2 to 8                  | all succeed, milliseconds     |
+| 10                      | all succeed, but 1.4 seconds  |
+| 15                      | 5 of 15, exit codes 65 and 69 |
+| 20                      | 12 of 20                      |
+
+This pattern also crashed Hammerspoon twice during development, with
+`EXC_BREAKPOINT` inside `CFMessagePortSendRequest`, a pointer-authentication
+failure on an invalidated port. A client should not be able to crash the
+application by connecting too quickly; that part is a Hammerspoon bug rather
+than something this server can fix.
+
+### Why the limit is four and not one
+
+Given Lua is serial, a strict one-at-a-time queue looks like the obvious
+answer. It is measurably worse:
+
+| Gate | 40 calls | Per call |
+| ---- | -------- | -------- |
+| 1    | 315ms    | 7.88ms   |
+| 2    | 201ms    | 5.03ms   |
+| 4    | 111ms    | 2.77ms   |
+| 8    | 3745ms   | 93.63ms  |
+
+A call is roughly 8ms of process spawn plus microseconds of Lua. The Lua cannot
+overlap, but the **spawning** can: while one call runs its body, the next few
+are already loading. Four pipelines the expensive part around the serial core
+and still sits well below where the channel degrades. Eight is past the cliff.
+
+The gate is a plain FIFO in `src/bridge/bridge.ts`, shared across every bridge
+instance, because the thing being protected is the single Hammerspoon process
+rather than any one object.
+
+### Consequences worth knowing
+
+- **A slow tool blocks every other tool.** There is one till. Any Lua that
+  blocks (a network scan, a `usleep`, a modal dialog) stalls unrelated calls.
+  Tool bodies must stay fast and must not do blocking I/O.
+- **This is a correctness property, not a performance tweak.** Removing the
+  gate does not make things faster, it makes calls fail.
+- **It changes if the transport changes.** Moving from spawn-per-call to one
+  persistent connection (`hs.httpserver` or a Unix socket) measured 0.95ms per
+  call against 8.72ms, a 9.2x improvement, and removes the port churn entirely.
+  With no process to spawn there is nothing left to pipeline, so the gate would
+  correctly become a limit of one.
+
 ## Error taxonomy
 
 `src/bridge/errors.ts`. Every bridge failure is one of a closed set of kinds.

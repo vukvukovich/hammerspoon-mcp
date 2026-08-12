@@ -293,6 +293,22 @@ Open a
 [security advisory](https://github.com/vukvukovich/hammerspoon-mcp/security/advisories/new)
 on the repository rather than a public issue.
 
+## One thing to know: calls are queued
+
+Hammerspoon runs Lua on a single thread, so it executes one call at a time no
+matter how many arrive. Measured: four 400ms calls issued together take 1629ms,
+not 417ms.
+
+The server queues accordingly, four in flight at once. That is not a throttle
+for its own sake. Left unbounded, simultaneous calls do not merely wait, they
+start failing (5 of 15 succeeded in testing) and the pattern crashed
+Hammerspoon twice inside its own IPC layer.
+
+The practical consequence: **a slow tool blocks the others**, because there is
+only one queue. If something feels stuck, one call is usually holding it.
+[ARCHITECTURE.md](./docs/ARCHITECTURE.md#concurrency-calls-are-queued-four-at-a-time)
+has the measurements.
+
 ## Troubleshooting
 
 Start with `hs_health`. It is designed to tell you which of these you have.
