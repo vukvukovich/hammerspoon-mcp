@@ -63,7 +63,10 @@ if _hsmcp_speaker then
 end
 -- 0.5s rather than 0.15s: the stop above delivers its completion callback on
 -- the runloop after this reply leaves, and the reload must not beat it.
-hs.timer.doAfter(0.5, hs.reload)
+-- Anchored in a global because an unreferenced Hammerspoon timer can be
+-- garbage-collected before it fires, turning the reload into a silent no-op
+-- (#23). The global dies with the state on reload, so it cannot leak.
+_hsmcp_reload_timer = hs.timer.doAfter(0.5, hs.reload)
 return { scheduled = true }
 `;
 
