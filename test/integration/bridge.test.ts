@@ -65,19 +65,11 @@ describe.skipIf(!available)('bridge against real Hammerspoon', () => {
     expect(result).toEqual({ ok: true, value: undefined });
   });
 
-  it('honours a short timeout', async () => {
-    // usleep blocks Hammerspoon's main thread, and killing our client does not
-    // wake it. So keep the sleep barely longer than the timeout: a long one
-    // leaves Hammerspoon unresponsive well after this test passes, and every
-    // test that follows races it. That is what made hs_console_tail fail
-    // intermittently, and only when run as part of the suite.
-    const result = await bridge.run(lua`hs.timer.usleep(700000) return 1`, {}, { timeoutMs: 300 });
-    expect(result.ok).toBe(false);
-    if (result.ok) return;
-    expect(result.error.kind).toBe('Timeout');
-
-    await waitForResponsive();
-  });
+  // The deliberately-wedging timeout test lives at the END of the tool
+  // describe below, not here: killing a client mid-call opens a window of
+  // degraded IPC (the hs CLI intermittently dies with
+  // NSDestinationInvalidException for the next ~20s), and every test that ran
+  // after it in file order was racing that window.
 });
 
 /**
@@ -144,8 +136,13 @@ describe.skipIf(!available)('tool Lua executes against real Hammerspoon', () => 
     ['hs_default_browser', {}],
     ['hs_settings', { action: 'list' }],
   ])('%s succeeds', async (name, args) => {
-    const result = await runTool(name, args);
-    expect(result.isError).not.toBe(true);
+    const result = (await runTool(name, args)) as unknown as {
+      isError?: boolean;
+      content?: { text?: string }[];
+    };
+    // The failure text rides along so a red run says what went wrong instead
+    // of only "expected true not to be true".
+    expect(result.isError, result.content?.[0]?.text ?? '').not.toBe(true);
   });
 
   // Targets Hammerspoon explicitly rather than the frontmost app. Whatever
@@ -586,4 +583,50 @@ return true
     expect(result.isError).not.toBe(true);
     expect(JSON.stringify(result)).toContain('42');
   });
+
+  /**
+   * Deliberately second-to-last, see the note in the bridge describe: the
+   * timeout kill degrades IPC for the tests that follow, so only the reload
+   * test (which perturbs everything anyway) comes after it.
+   */
+  it('honours a short timeout', async () => {
+    // usleep blocks Hammerspoon's main thread, and killing our client does not
+    // wake it. So keep the sleep barely longer than the timeout: a long one
+    // leaves Hammerspoon unresponsive well after this test passes, and every
+    // test that follows races it.
+    const result = await bridge.run(lua`hs.timer.usleep(700000) return 1`, {}, { timeoutMs: 300 });
+    expect(result.ok).toBe(false);
+    if (result.ok) return;
+    expect(result.error.kind).toBe('Timeout');
+
+    await waitForResponsive();
+  });
+
+  /**
+   * Regression test for #16, deliberately last: it reloads the user's real
+   * configuration, which resets all in-memory Hammerspoon state and takes a
+   * few seconds, so everything after it would race the reload.
+   *
+   * The killer sequence was hs_speak with the utterance still in flight when
+   * hs_reload_config tore the Lua state down: the synthesiser's completion
+   * callback then unrefs into the dead state and aborts the entire app. The
+   * tool now stops the speaker first. This proves the process survives the
+   * exact sequence that used to kill it, and that the bridge answers again.
+   */
+  it('hs_reload_config survives with speech in flight (#16)', async () => {
+    const spoken = await runTool('hs_speak', {
+      text: 'integration test: reloading the configuration while this sentence is still being spoken',
+    });
+    expect(spoken.isError).not.toBe(true);
+
+    const result = await runTool('hs_reload_config', {});
+    expect(result.isError).not.toBe(true);
+
+    // Give the scheduled reload time to fire and the config time to load.
+    await new Promise((resolve) => setTimeout(resolve, 4000));
+    await waitForResponsive(30);
+
+    const probe = await bridge.run(lua`return "alive after reload"`);
+    expect(probe).toEqual({ ok: true, value: 'alive after reload' });
+  }, 30_000);
 });

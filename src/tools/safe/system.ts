@@ -45,9 +45,25 @@ return { shown = true }
  * state, and the IPC channel with it, so calling it inline kills the process
  * that is still trying to send us a reply. A short timer lets the reply leave
  * first.
+ *
+ * The speaker shutdown is load-bearing (#16). A synthesiser still speaking
+ * when the state is torn down delivers didFinishSpeaking afterwards, and that
+ * callback's luaUnref into the dead state is a Lua C assertion, which is
+ * SIGABRT for the whole app: hs_speak followed by hs_reload_config killed
+ * Hammerspoon outright, reproduced three times with identical stacks.
+ * Stopping our speaker here lets its callback land while the state is alive.
+ * Measured for the other landmines: reload alone is 10/10 stable, hs.task
+ * callbacks spanning a reload survive 5/5, and reload under concurrent
+ * external IPC traffic survives 5/5, so speech is the one that needed this.
  */
 const RELOAD_LUA = lua`
-hs.timer.doAfter(0.15, hs.reload)
+if _hsmcp_speaker then
+  pcall(function() _hsmcp_speaker:stop() end)
+  _hsmcp_speaker = nil
+end
+-- 0.5s rather than 0.15s: the stop above delivers its completion callback on
+-- the runloop after this reply leaves, and the reload must not beat it.
+hs.timer.doAfter(0.5, hs.reload)
 return { scheduled = true }
 `;
 
@@ -99,7 +115,7 @@ export const reloadConfigTool = defineTool({
   tier: 'safe',
   title: 'Reload the Hammerspoon configuration',
   description:
-    'Reload ~/.hammerspoon/init.lua. Use after editing the user configuration. The reload is scheduled a moment ahead so this call can return first, and it resets all in-memory state held by the configuration.',
+    'Reload ~/.hammerspoon/init.lua. Use after editing the user configuration. The reload is scheduled a moment ahead so this call can return first, and it resets all in-memory state held by the configuration. Speech started by hs_speak is stopped first; a speech callback landing after the reload would crash Hammerspoon.',
   inputSchema: z.object({}),
   handler: async (_args, { bridge }) => {
     const result = await bridge.run(RELOAD_LUA);
