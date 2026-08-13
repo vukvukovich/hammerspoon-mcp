@@ -1,11 +1,19 @@
-# @vukvukovich/hammerspoon-mcp
+<div align="center">
 
-[![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](./LICENSE)
-[![Node](https://img.shields.io/badge/node-%3E%3D24-brightgreen.svg)](https://nodejs.org)
-[![Status: pre-release](https://img.shields.io/badge/status-pre--release%20v0.x-orange.svg)](#project-status)
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="https://raw.githubusercontent.com/vukvukovich/hammerspoon-mcp/main/docs/assets/banner-dark.svg">
+  <img src="https://raw.githubusercontent.com/vukvukovich/hammerspoon-mcp/main/docs/assets/banner-light.svg" alt="Hammerspoon MCP" width="680">
+</picture>
+
+[![npm](https://img.shields.io/npm/v/%40vukvukovich%2Fhammerspoon-mcp?style=flat-square&label=npm&color=ffcc66)](https://www.npmjs.com/package/@vukvukovich/hammerspoon-mcp)
+[![CI](https://img.shields.io/github/actions/workflow/status/vukvukovich/hammerspoon-mcp/ci.yml?branch=main&style=flat-square&label=ci)](https://github.com/vukvukovich/hammerspoon-mcp/actions/workflows/ci.yml)
+[![node](https://img.shields.io/node/v/%40vukvukovich%2Fhammerspoon-mcp?style=flat-square&label=node&color=5fa04e)](https://nodejs.org)
+[![license](https://img.shields.io/badge/license-MIT-4c72b0?style=flat-square)](./LICENSE)
 
 Let an AI agent drive your Mac through Hammerspoon, without ever splicing its
 input into Lua source.
+
+</div>
 
 ## What it is
 
@@ -23,9 +31,9 @@ Desktop, or your own.
 
 ## Project status
 
-Pre-release, `v0.x`. The tool surface below is the planned v0.1 set. Names and
-argument shapes can still change between minor versions. Nothing here is
-API-stable yet.
+Published on npm as `v0.2.x`: 38 safe-tier tools, plus 3 gated behind
+`HS_MCP_TOOLS=all`. Still pre-1.0, so tool names and argument shapes can
+change between minor versions.
 
 ## Why this one is different
 
