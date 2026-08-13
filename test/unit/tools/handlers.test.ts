@@ -63,6 +63,21 @@ const SUCCESS: BridgeResult<unknown> = { ok: true, value: { fine: true } };
  * tool is a deliberate act.
  */
 const BRIDGE_FREE_TOOLS = new Set(['hs_api_search']);
+
+/**
+ * Tools allowed more than one bridge call per invocation, with the exact
+ * count they make against the SUCCESS fake below. Adding a tool here is a
+ * deliberate act; the default expectation is one call (#25).
+ *
+ * hs_move_window: move, then frame read-back. hs_music_control: act, then one
+ * status read (the fake's generic value parses loosely, ending the poll).
+ * hs_goto_space makes only its first call here because the fake's value fails
+ * its result parse and the handler returns early.
+ */
+const EXPECTED_CALL_COUNTS = new Map<string, number>([
+  ['hs_move_window', 2],
+  ['hs_music_control', 2],
+]);
 const BRIDGE_TOOLS = ALL_TOOLS.filter((tool) => !BRIDGE_FREE_TOOLS.has(tool.name)).map(
   (tool) => tool.name
 );
@@ -82,9 +97,14 @@ describe('every tool', () => {
       {}
     );
 
-    // Read-back tools legitimately run more than one program per call
-    // (act, then observe), so at least one rather than exactly one.
-    expect(calls.length).toBeGreaterThanOrEqual(1);
+    // Exactly the declared number of bridge calls, so a tool that regresses
+    // into issuing extra side-effecting programs per invocation fails here.
+    // Read-back tools (act, then observe) declare their higher counts in
+    // EXPECTED_CALL_COUNTS; everything else must make exactly one call. The
+    // counts describe behaviour against THIS fake (whose generic response
+    // fails some read-back parses and ends those handlers early), so a
+    // changed handler flow shows up as a changed number.
+    expect(calls.length).toBe(EXPECTED_CALL_COUNTS.get(name) ?? 1);
     for (const call of calls) {
       const lua = call.lua;
       expect(lua.length).toBeGreaterThan(0);
