@@ -8,8 +8,10 @@ import type { ToolContext } from '../registry.js';
 /**
  * Spaces are macOS virtual desktops. Hammerspoon indexes them by an opaque
  * numeric id that means nothing to a person, so these tools also expose a
- * stable 1-based position per screen, which is what a user actually says
- * ("desktop 2") and what the Ctrl+N keyboard shortcuts correspond to.
+ * 1-based position, numbered sequentially across all screens the way macOS
+ * itself numbers desktops: what a user actually says ("desktop 2") and what
+ * the Ctrl+N keyboard shortcuts correspond to. Both tools use the same
+ * numbering; ids change when macOS auto-rearranges Spaces, positions do not.
  */
 
 const LIST_SPACES_LUA = lua`
@@ -17,10 +19,15 @@ local focused = hs.spaces.focusedSpace()
 local names = hs.spaces.missionControlSpaceNames() or {}
 local out = {}
 
+-- One position counter across ALL screens, not one per screen: macOS numbers
+-- desktops sequentially across displays, which is what the Ctrl+N shortcuts
+-- address and what hs_goto_space resolves against. Numbering per screen made
+-- the two tools disagree on every multi-monitor machine (#21).
+local position = 0
+
 for _, screen in ipairs(hs.screen.allScreens()) do
   local uuid = screen:getUUID()
   local ids = hs.spaces.allSpaces()[uuid] or {}
-  local position = 0
   local screenNames = names[uuid] or {}
 
   for _, id in ipairs(ids) do
@@ -74,6 +81,15 @@ if target == nil then
     .. "; there are " .. tostring(seen) .. " desktops", 0)
 end
 if position == nil then
+  -- Distinguish "that id is a fullscreen space" from "that id is unknown":
+  -- fullscreen ids come straight out of hs_list_spaces, so telling the caller
+  -- to consult hs_list_spaces for them was circular (#21).
+  local known, kind = pcall(function() return hs.spaces.spaceType(target) end)
+  if known and kind ~= nil and kind ~= "user" then
+    error("space " .. tostring(target) .. " is a " .. tostring(kind)
+      .. " space (a fullscreen app). Only numbered user desktops can be"
+      .. " switched to; focus the app with hs_focus_app instead", 0)
+  end
   error("no user desktop has id " .. tostring(target)
     .. ". Call hs_list_spaces for current ids; they change when macOS rearranges Spaces", 0)
 end
@@ -156,7 +172,9 @@ export const gotoSpaceTool = defineTool({
         .min(1)
         .max(16)
         .optional()
-        .describe('1-based user desktop position on the main screen.'),
+        .describe(
+          '1-based user desktop position, numbered across all screens the way macOS and hs_list_spaces number them.'
+        ),
     })
     .refine((value) => (value.id === undefined) !== (value.position === undefined), {
       message: 'Provide exactly one of id or position.',
@@ -167,7 +185,7 @@ export const gotoSpaceTool = defineTool({
     const parsed = GOTO_RESULT_SCHEMA.safeParse(first.value);
     if (!parsed.success) return fromBridge(first);
 
-    const target = parsed.data;
+    let target = parsed.data;
     if (target.alreadyThere === true) {
       return jsonResult({ id: target.id, position: target.position, alreadyThere: true });
     }
@@ -175,11 +193,19 @@ export const gotoSpaceTool = defineTool({
     let landed = await waitForSpace(bridge, target.id);
 
     // One retry: macOS occasionally swallows the first keystroke while it is
-    // still animating something else, and rearranged Spaces can shift the
-    // digit a target answers to, which the rerun recomputes from fresh state.
+    // still animating something else, and rearranged Spaces can shift both
+    // the digit a target answers to and the id sitting at a requested
+    // position. The rerun recomputes from fresh state, so the verdict must
+    // come from ITS resolution, not the stale first one (#21).
     if (landed !== target.id) {
       const second = await bridge.run(GOTO_SPACE_LUA, args);
-      if (second.ok) landed = await waitForSpace(bridge, target.id);
+      if (second.ok) {
+        const reparsed = GOTO_RESULT_SCHEMA.safeParse(second.value);
+        if (reparsed.success) {
+          target = reparsed.data;
+          landed = target.alreadyThere === true ? target.id : await waitForSpace(bridge, target.id);
+        }
+      }
     }
 
     const arrived = landed === target.id;

@@ -235,6 +235,37 @@ describe('read-back after acting (#17)', () => {
     expect(payload.id).toBe(4);
   });
 
+  // Auto-rearranged Spaces can change which id sits at a position between the
+  // first attempt and the retry; the verdict must track the retry's fresh
+  // resolution (#21). The first resolution answers id 4 but the system sits
+  // on 9; the rerun resolves the same position to id 7 and arrives there.
+  it('hs_goto_space judges arrival by the rerun target after a rearrange', async () => {
+    let gotoCalls = 0;
+    const run = vi.fn((luaSource: string) => {
+      if (luaSource.includes('allSpaces')) {
+        gotoCalls += 1;
+        return Promise.resolve({
+          ok: true,
+          value: { id: gotoCalls === 1 ? 4 : 7, position: 2, method: 'keystroke' },
+        });
+      }
+      return Promise.resolve({ ok: true, value: { focused: gotoCalls >= 2 ? 7 : 9 } });
+    });
+    const bridge = { hsPath: '/fake/hs', run } as unknown as HammerspoonBridge;
+
+    const result = await handlerFor('hs_goto_space', { bridge, docs: stubDocs })(
+      { position: 2 },
+      {}
+    );
+
+    const payload = JSON.parse(result.content[0]?.text ?? '{}') as {
+      arrived: boolean;
+      id: number;
+    };
+    expect(payload.arrived).toBe(true);
+    expect(payload.id).toBe(7);
+  }, 10_000);
+
   it('hs_goto_space does not verify when it was already there', async () => {
     const run = vi
       .fn()
