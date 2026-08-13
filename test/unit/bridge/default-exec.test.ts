@@ -108,6 +108,47 @@ describe('the real subprocess path', () => {
     expect(await gone()).toBe(true);
   }, 15_000);
 
+  // Lingering children hold real message-port connections, so they carry
+  // their own ceiling: when one too many would linger, the oldest is evicted
+  // (#20). Six children time out with a long linger; at most four survive.
+  it('bounds the number of lingering children by evicting the oldest', async () => {
+    const marker = `linger-pool-probe-${String(process.pid)}`;
+    const spawnLingering = (index: number) =>
+      spawnExec(
+        process.execPath,
+        ['-e', `setInterval(() => {}, 1000); // ${marker}-${String(index)}`],
+        { timeout: 200, maxBuffer: 1024, lingerMs: 10_000 }
+      ).catch(() => undefined);
+
+    const { execFile } = await import('node:child_process');
+    const { promisify } = await import('node:util');
+    const exec = promisify(execFile);
+    const aliveCount = async (): Promise<number> => {
+      try {
+        const { stdout } = await exec('/usr/bin/pgrep', ['-f', marker]);
+        return stdout.trim().split('\n').filter(Boolean).length;
+      } catch {
+        return 0;
+      }
+    };
+
+    try {
+      await Promise.all([0, 1, 2, 3, 4, 5].map(spawnLingering));
+      // Evicted children get SIGTERM immediately and node dies of it; give
+      // the signals a moment to land before counting.
+      const deadline = Date.now() + 5000;
+      let count = await aliveCount();
+      while (count > 4 && Date.now() < deadline) {
+        await new Promise((resolve) => setTimeout(resolve, 150));
+        count = await aliveCount();
+      }
+      expect(count).toBeLessThanOrEqual(4);
+      expect(count).toBeGreaterThan(0);
+    } finally {
+      await exec('/usr/bin/pkill', ['-f', marker]).catch(() => undefined);
+    }
+  }, 15_000);
+
   // SIGTERM is catchable. A child that ignores it never emits 'close', so
   // without escalation it would live past the linger forever. SIGKILL cannot
   // be caught. The promise itself settles at the deadline either way; what

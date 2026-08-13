@@ -58,6 +58,24 @@ const SIGKILL_GRACE_MS = 2000;
 const TIMEOUT_LINGER_MS = 30_000;
 
 /**
+ * Ceiling on lingering timed-out children, alongside the call gate below.
+ *
+ * A lingering child no longer occupies a gate slot (its caller was already
+ * unblocked), but it still holds a real CFMessagePort connection, and the
+ * measured channel budget is about eight concurrent connections before
+ * degradation sets in. Four active plus four lingering sits exactly at that
+ * measured ceiling. When a fifth child would linger, the oldest lingering one
+ * is killed early instead; that early kill re-admits the dead-port-reply
+ * crash risk, but only in the already-pathological case of five simultaneous
+ * wedged calls, where Hammerspoon is not replying to anything anyway (#20).
+ */
+const MAX_LINGERING_CHILDREN = 4;
+
+/** Oldest-first registry of lingering children, shared like the call gate:
+ * the protected resource is the one Hammerspoon process. */
+const lingeringChildren: { readonly terminate: () => void }[] = [];
+
+/**
  * Ceiling on `hs` processes in flight at once, across every bridge instance.
  *
  * Each invocation opens its own CFMessagePort to Hammerspoon, and that channel
@@ -76,6 +94,11 @@ const TIMEOUT_LINGER_MS = 30_000;
  * limit is chosen instead so process startup still overlaps, which is the only
  * part that genuinely parallelises. Four sits far below the level where any
  * degradation was observed.
+ *
+ * This gate counts active calls only. A timed-out call frees its slot at the
+ * deadline while its child lingers on (see TIMEOUT_LINGER_MS), so lingering
+ * children get their own ceiling, MAX_LINGERING_CHILDREN, and the two bounds
+ * together keep the total connection count inside the measured budget.
  */
 const MAX_CONCURRENT_CALLS = 4;
 
@@ -216,6 +239,7 @@ export const spawnExec: ExecFn = async (file, args, options) =>
     };
 
     let lingerTimer: NodeJS.Timeout | undefined;
+    const lingerEntry = { terminate };
 
     const timer = setTimeout(() => {
       // Unblock the caller at the deadline, but do NOT kill the child yet:
@@ -234,6 +258,12 @@ export const spawnExec: ExecFn = async (file, args, options) =>
           })
         );
       });
+      // Entering the linger pool may evict the oldest resident: the total of
+      // active plus lingering children must stay inside the channel budget.
+      while (lingeringChildren.length >= MAX_LINGERING_CHILDREN) {
+        lingeringChildren.shift()?.terminate();
+      }
+      lingeringChildren.push(lingerEntry);
       lingerTimer = setTimeout(terminate, options.lingerMs ?? TIMEOUT_LINGER_MS);
       lingerTimer.unref();
     }, options.timeout);
@@ -267,9 +297,11 @@ export const spawnExec: ExecFn = async (file, args, options) =>
     });
 
     child.on('close', (code, signal) => {
-      // A lingering timed-out child that exits naturally no longer needs its
-      // backstop kill.
+      // A lingering timed-out child that exits (naturally or evicted) no
+      // longer needs its backstop kill or its pool slot.
       if (lingerTimer !== undefined) clearTimeout(lingerTimer);
+      const pooled = lingeringChildren.indexOf(lingerEntry);
+      if (pooled !== -1) lingeringChildren.splice(pooled, 1);
       settle(() => {
         // Flush whatever the decoders were holding. A process killed mid
         // character leaves a partial sequence, and end() turns it into the
