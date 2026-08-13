@@ -213,6 +213,48 @@ describe.skipIf(!available)('tool Lua executes against real Hammerspoon', () => 
     }
   });
 
+  // Regression test for #15: every call used to fail before reaching the
+  // Shortcut at all. Proving the fix needs a real start, but running an
+  // arbitrary user shortcut is a side-effect roulette, so this only runs a
+  // shortcut named by HS_MCP_TEST_SHORTCUT (or the default below) and skips
+  // when the machine has no such shortcut. The spawned CLI is killed
+  // afterwards, because an interactive or broken shortcut can wait forever
+  // when run non-interactively and a test must not leak processes.
+  it('hs_run_shortcut starts a real shortcut without erroring', async (ctx) => {
+    const safeName = process.env['HS_MCP_TEST_SHORTCUT'] ?? 'Open Finder file manager';
+
+    const listed = (await runTool('hs_list_shortcuts', {})) as unknown as {
+      content: { text: string }[];
+    };
+    const parsed = JSON.parse(listed.content[0]?.text ?? '{}') as {
+      shortcuts?: { name: string }[];
+    };
+    const names = (parsed.shortcuts ?? []).map((entry) => entry.name);
+    if (!names.includes(safeName)) ctx.skip();
+
+    try {
+      const result = (await runTool('hs_run_shortcut', { name: safeName })) as unknown as {
+        isError?: boolean;
+        content: { text: string }[];
+      };
+      expect(result.isError).not.toBe(true);
+      expect(result.content[0]?.text).toContain('started');
+    } finally {
+      const { execFile } = await import('node:child_process');
+      execFile('/usr/bin/pkill', ['-f', `shortcuts run -- ${safeName}`], () => {
+        // pkill exits 1 when nothing matched, which is the happy case here.
+      });
+    }
+  });
+
+  it('hs_run_shortcut lists the alternatives when nothing matches', async () => {
+    const result = (await runTool('hs_run_shortcut', {
+      name: 'no-such-shortcut-xyz',
+    })) as unknown as { isError?: boolean; content: { text: string }[] };
+    expect(result.isError).toBe(true);
+    expect(result.content[0]?.text).toContain('Available');
+  });
+
   it('hs_audio_set_device lists the alternatives when nothing matches', async () => {
     const result = await runTool('hs_audio_set_device', { name: 'no-such-device-xyz' });
     expect(result.isError).toBe(true);

@@ -13,8 +13,9 @@ import { defineTool, fromBridge } from '../registry.js';
  */
 
 // Each entry is a table of { id, name, acceptsInput, actionCount }, not a bare
-// string. acceptsInput is worth surfacing: passing input to a shortcut that
-// does not accept any silently does nothing.
+// string. acceptsInput is still surfaced even though hs_run_shortcut cannot
+// pass input (hs.shortcuts.run takes only a name): it tells the caller which
+// shortcuts would need the Shortcuts app or CLI to be driven with input.
 const LIST_SHORTCUTS_LUA = lua`
 local entries = hs.shortcuts.list() or {}
 local out = {}
@@ -48,9 +49,32 @@ if not target then
     .. table.concat(available, ", "), 0)
 end
 
--- Shortcuts run asynchronously and their result is not returned to Lua, so
--- reporting "started" is the honest answer rather than implying completion.
-hs.shortcuts.run(target, ARGS.input)
+-- hs.shortcuts.run would be the obvious call (and #15's arity fix alone would
+-- make it compile), but it drives Shortcuts Events over synchronous
+-- AppleScript, blocking Hammerspoon's main thread for the shortcut's entire
+-- duration. Anything past ~4s trips the hs CLI's own receive timeout and
+-- stalls every queued tool call behind it. hs.task runs the shortcuts CLI
+-- asynchronously instead: argv so no shell parses the name, and the reply
+-- leaves immediately. "--" keeps a name that starts with a dash from being
+-- read as a flag.
+local task = hs.task.new("/usr/bin/shortcuts", function(exitCode, _, stdErr)
+  if exitCode ~= 0 then
+    print("hs_run_shortcut: '" .. target .. "' exited " .. tostring(exitCode)
+      .. ": " .. tostring(stdErr))
+  end
+end, { "run", "--", target })
+if not task or task:start() == false then
+  error("could not start /usr/bin/shortcuts", 0)
+end
+
+-- A started hs.task is killed if Lua collects it mid-run, so anchor it in a
+-- namespaced global until it exits, pruning earlier finished runs.
+__hsmcp_shortcut_tasks = __hsmcp_shortcut_tasks or {}
+for i = #__hsmcp_shortcut_tasks, 1, -1 do
+  if not __hsmcp_shortcut_tasks[i]:isRunning() then table.remove(__hsmcp_shortcut_tasks, i) end
+end
+__hsmcp_shortcut_tasks[#__hsmcp_shortcut_tasks + 1] = task
+
 return { started = target, matchedExactly = exact ~= nil }
 `;
 
@@ -70,14 +94,13 @@ export const runShortcutTool = defineTool({
   tier: 'safe',
   title: 'Run a macOS Shortcut',
   description:
-    "Run one of the user's macOS Shortcuts by name, optionally passing text input. Shortcuts run asynchronously, so this reports that it started rather than what it produced. Call hs_list_shortcuts first to get exact names.",
+    "Run one of the user's macOS Shortcuts by name. Input cannot be passed; a shortcut that needs input will run without it. The shortcut runs in the background, so this reports that it started rather than what it produced; a shortcut that fails after starting logs to the console, visible via hs_console_tail. Call hs_list_shortcuts first to get exact names.",
   inputSchema: z.object({
     name: z
       .string()
       .min(1)
       .max(200)
       .describe('Shortcut name from hs_list_shortcuts. A substring is accepted.'),
-    input: z.string().max(10_000).optional().describe('Optional text input for the shortcut.'),
   }),
   handler: async (args, { bridge }) => fromBridge(await bridge.run(RUN_SHORTCUT_LUA, args)),
 });
