@@ -23,6 +23,12 @@
           "default": "safe"
         },
         {
+          "name": "HS_MCP_TRANSPORT",
+          "description": "How Lua reaches Hammerspoon. \"socket\" (default) keeps one persistent Unix domain socket, self-installed on first call, with automatic fallback to spawning; \"spawn\" runs one hs process per call.",
+          "isRequired": false,
+          "default": "socket"
+        },
+        {
           "name": "HS_MCP_HS_PATH",
           "description": "Explicit path to the Hammerspoon hs command line tool. Only needed when Hammerspoon is installed somewhere unusual.",
           "isRequired": false

@@ -26,6 +26,9 @@ import {
   type BridgeResult,
 } from './errors.js';
 import { resolveHsPath, type HsPathLookup } from './hs-path.js';
+import { createSocketExec } from './socket-transport.js';
+
+import type { TransportKind } from '../config/env.js';
 import type { LuaProgram } from './lua.js';
 
 /** Hammerspoon runs Lua on its main thread, so a hung call blocks everything. */
@@ -175,6 +178,11 @@ export type BridgeOptions = {
   readonly exec?: ExecFn;
   /** Injected in tests to simulate a machine without Hammerspoon installed. */
   readonly exists?: (path: string) => boolean;
+  /**
+   * How Lua reaches Hammerspoon: the persistent socket (default) or one
+   * spawned process per call. Ignored when `exec` is injected.
+   */
+  readonly transport?: TransportKind;
 };
 
 export type RunOptions = {
@@ -335,7 +343,8 @@ export class HammerspoonBridge {
   readonly #lookup: HsPathLookup;
 
   constructor(options: BridgeOptions = {}) {
-    this.#exec = options.exec ?? spawnExec;
+    this.#exec =
+      options.exec ?? (options.transport === 'spawn' ? spawnExec : createSocketExec(spawnExec));
     this.#defaultTimeoutMs = options.defaultTimeoutMs ?? DEFAULT_TIMEOUT_MS;
     this.#lookup = resolveHsPath({
       override: options.hsPathOverride,

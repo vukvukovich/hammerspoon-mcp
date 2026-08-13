@@ -29,7 +29,10 @@ export function createServer(config: ServerConfig): McpServer {
     { capabilities: { tools: {} } }
   );
 
-  const bridge = new HammerspoonBridge({ hsPathOverride: config.hsPathOverride });
+  const bridge = new HammerspoonBridge({
+    hsPathOverride: config.hsPathOverride,
+    transport: config.transport,
+  });
   // Parsed lazily on first search, so startup stays fast and a missing docs
   // file only affects the one tool that needs it.
   const docs = new DocsIndex(config.docsPathOverride);

@@ -65,6 +65,39 @@ describe.skipIf(!available)('bridge against real Hammerspoon', () => {
     expect(result).toEqual({ ok: true, value: undefined });
   });
 
+  // #19's acceptance criterion. Under spawn-per-call this level of
+  // concurrency lost most of the calls to CFMessagePort churn (5 of 15
+  // succeeded); over the persistent socket all of them must land.
+  it('forty simultaneous calls all succeed', async () => {
+    const results = await Promise.all(Array.from({ length: 40 }, () => bridge.run(lua`return 7`)));
+    expect(results.filter((result) => result.ok)).toHaveLength(40);
+  });
+
+  it('the socket lives in a directory only this user can reach', async () => {
+    // Force the transport up, then inspect where it lives.
+    const probe = await bridge.run(lua`return "up"`);
+    expect(probe.ok).toBe(true);
+
+    const { defaultSocketPath } = await import('../../src/bridge/socket-transport.js');
+    const fs = await import('node:fs');
+    const nodePath = await import('node:path');
+    const socketPath = defaultSocketPath();
+    const stats = fs.statSync(socketPath, { throwIfNoEntry: false });
+    // The bridge may be on the spawn fallback if bootstrap failed; only when
+    // the socket exists is there a permission surface to verify.
+    if (stats === undefined) return;
+    const dirMode = fs.statSync(nodePath.dirname(socketPath)).mode;
+    // No group or other bits on the containing directory: $TMPDIR is
+    // per-user 0700 on macOS, which is what gates access to the socket.
+    expect(dirMode & 0o077).toBe(0);
+  });
+
+  it('the spawn transport still round-trips when forced', async () => {
+    const spawnBridge = new HammerspoonBridge({ transport: 'spawn' });
+    const result = await spawnBridge.run(lua`return "spawned"`);
+    expect(result).toEqual({ ok: true, value: 'spawned' });
+  });
+
   // The deliberately-wedging timeout test lives at the END of the tool
   // describe below, not here: killing a client mid-call opens a window of
   // degraded IPC (the hs CLI intermittently dies with

@@ -213,12 +213,13 @@ connected with default settings will not see `hs_eval` in its tool list.
 
 All configuration is environment variables, read once at startup.
 
-| Variable           | Values                                 | Default             | Meaning                                                                           |
-| ------------------ | -------------------------------------- | ------------------- | --------------------------------------------------------------------------------- |
-| `HS_MCP_TOOLS`     | `safe` \| `all`                        | `safe`              | Which tiers to register. `all` adds the unsafe tier, which today means `hs_eval`. |
-| `HS_MCP_HS_PATH`   | absolute path                          | auto-detected       | Path to the `hs` binary. Set this if your install is somewhere unusual.           |
-| `HS_MCP_DOCS_PATH` | absolute path                          | from the app bundle | Path to Hammerspoon's bundled API documentation JSON, used by `hs_api_search`.    |
-| `HS_MCP_LOG_LEVEL` | `debug` \| `info` \| `warn` \| `error` | `info`              | Verbosity of the stderr log. Logs never touch stdout, which carries the protocol. |
+| Variable           | Values                                 | Default             | Meaning                                                                                                                                                         |
+| ------------------ | -------------------------------------- | ------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `HS_MCP_TOOLS`     | `safe` \| `all`                        | `safe`              | Which tiers to register. `all` adds the unsafe tier, which today means `hs_eval`.                                                                               |
+| `HS_MCP_TRANSPORT` | `socket` \| `spawn`                    | `socket`            | How Lua reaches Hammerspoon: a persistent Unix socket (~10x faster, self-installed on first call, falls back to spawn by itself), or one `hs` process per call. |
+| `HS_MCP_HS_PATH`   | absolute path                          | auto-detected       | Path to the `hs` binary. Set this if your install is somewhere unusual.                                                                                         |
+| `HS_MCP_DOCS_PATH` | absolute path                          | from the app bundle | Path to Hammerspoon's bundled API documentation JSON, used by `hs_api_search`.                                                                                  |
+| `HS_MCP_LOG_LEVEL` | `debug` \| `info` \| `warn` \| `error` | `info`              | Verbosity of the stderr log. Logs never touch stdout, which carries the protocol.                                                                               |
 
 An unrecognised value for `HS_MCP_TOOLS` is a startup error, not a silent
 fallback. Failing loudly is better than quietly running in a tier you did not

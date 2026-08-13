@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 
-import { ENV_KEYS, loadConfig, parseExposure } from '../../../src/config/env.js';
+import { ENV_KEYS, loadConfig, parseExposure, parseTransport } from '../../../src/config/env.js';
 
 describe('parseExposure', () => {
   it('defaults to safe when unset', () => {
@@ -21,15 +21,36 @@ describe('parseExposure', () => {
   );
 });
 
+describe('parseTransport', () => {
+  it('defaults to the socket transport when unset', () => {
+    expect(parseTransport(undefined)).toBe('socket');
+  });
+
+  it.each(['socket', 'spawn', 'SPAWN', ' Socket '])('accepts %j', (value) => {
+    expect(parseTransport(value)).toBe(value.trim().toLowerCase());
+  });
+
+  // The socket transport falls back to spawn by itself when it cannot
+  // connect, so defaulting to it on a typo is safe rather than optimistic.
+  it.each(['tcp', 'http', 'fast', '1'])(
+    'falls back to socket for the unrecognised value %j',
+    (value) => {
+      expect(parseTransport(value)).toBe('socket');
+    }
+  );
+});
+
 describe('loadConfig', () => {
   it('reads every key from the supplied environment', () => {
     const config = loadConfig({
       [ENV_KEYS.exposure]: 'all',
+      [ENV_KEYS.transport]: 'spawn',
       [ENV_KEYS.hsPath]: '/custom/hs',
       [ENV_KEYS.docsPath]: '/custom/docs.json',
     });
     expect(config).toEqual({
       exposure: 'all',
+      transport: 'spawn',
       hsPathOverride: '/custom/hs',
       docsPathOverride: '/custom/docs.json',
     });
@@ -38,6 +59,7 @@ describe('loadConfig', () => {
   it('defaults to the safe tier with no overrides on an empty environment', () => {
     expect(loadConfig({})).toEqual({
       exposure: 'safe',
+      transport: 'socket',
       hsPathOverride: undefined,
       docsPathOverride: undefined,
     });

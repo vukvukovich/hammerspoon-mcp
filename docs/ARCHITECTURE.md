@@ -48,7 +48,8 @@ MCP client (Claude Code, Claude Desktop, ...)
         |  spawn(hsPath, ["-c", lua],
         |        { stdio: ["ignore", "pipe", "pipe"] })
         v
-   hs CLI  --->  Hammerspoon.app (Lua runtime)
+   unix socket (persistent, default)  --->  Hammerspoon.app (Lua runtime)
+   hs CLI (bootstrap + fallback)      --->  Hammerspoon.app (Lua runtime)
 ```
 
 Each layer only knows the one below it. Tools do not know how the subprocess is
@@ -390,6 +391,51 @@ Hammerspoon is single-threaded. A config stuck in a loop, or a modal dialog on
 screen, means calls do not return. The timeout is what turns that into a
 diagnosable error instead of an agent that appears to freeze.
 
+## The persistent socket transport
+
+`src/bridge/socket-transport.ts`. The default since 0.3; `HS_MCP_TRANSPORT=spawn`
+restores the classic behaviour.
+
+Spawning `hs` per call costs about 9ms of process overhead for Lua work that
+takes microseconds, and every spawn churns a CFMessagePort, the channel whose
+churn degraded concurrent calls and crashed Hammerspoon inside its own IPC
+layer. One long-lived Unix domain socket has nothing to churn. Measured with
+the committed benchmark (`node test/bench/transport-bench.mjs`): 0.97ms per
+call against 9.45ms, and forty simultaneous calls all succeed in ~25ms.
+
+The listener is **self-installing**: the first call bootstraps a small socket
+server inside the running Hammerspoon over one classic `hs -c` spawn, so there
+is nothing to add to the user's configuration. A config reload wipes the
+listener with the rest of the Lua state; the next call notices the dead
+socket and bootstraps again. When the socket cannot be established at all,
+calls are served by the spawn transport (with a 30s backoff between socket
+retries), so behaviour is never worse than the classic path — including on a
+machine where `hs.socket` misbehaves entirely.
+
+Three design points that were learned the hard way:
+
+- **One socket per MCP process**, `$TMPDIR/hsmcp-<pid>.sock`. hs.socket's
+  server object broadcasts writes to every connected client, so one shared
+  socket would cross replies between two MCP sessions. Per-process sockets
+  make the broadcast semantics harmless, and `$TMPDIR` is per-user mode 0700
+  on macOS, so access is user-only by construction. The socket deliberately
+  does not live under `~/.hammerspoon`: config watchers such as
+  ReloadConfiguration.spoon treat any file change there as a config edit and
+  reload, which would tear down the listener as a side effect of creating it.
+- **A call in flight when the connection dies is an error, not a retry.** The
+  program may already have run; re-running it on the fallback would repeat
+  its side effects. The error is classified as HsNotRunning, which is the
+  honest reading of a connection that just vanished.
+- **Timeouts drop the reply by id.** The caller unblocks at the deadline and
+  the connection stays up; the late reply matches no pending request and is
+  discarded. This is the linger fix's property for free: there is no port to
+  invalidate, so nothing crashes.
+
+The wire protocol is one JSON object per line in each direction; the Lua
+program travels base64-encoded and its returned envelope string comes back the
+same way. The codec, every tool, and the result parser are untouched: the
+transport implements the same `ExecFn` seam the spawn path does.
+
 ## Concurrency: calls are queued, four at a time
 
 MCP clients issue parallel tool calls as a matter of course. Ask an agent about
@@ -459,6 +505,14 @@ and still sits well below where the channel degrades. Eight is past the cliff.
 The gate is a plain FIFO in `src/bridge/bridge.ts`, shared across every bridge
 instance, because the thing being protected is the single Hammerspoon process
 rather than any one object.
+
+With the persistent socket as the default transport, the gate's numbers above
+describe the **spawn path**: the bootstrap call and every call served by the
+fallback. Socket-path calls flow through the same gate but a limit of four
+merely caps pipelining depth on the one connection, which measurement showed
+is harmless (forty simultaneous calls pipeline fine; Hammerspoon executes
+them serially either way). The gate is kept at four rather than reduced to
+one so the fallback path keeps its measured spawn-overlap benefit.
 
 ### Consequences worth knowing
 
