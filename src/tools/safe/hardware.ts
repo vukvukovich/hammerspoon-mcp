@@ -78,7 +78,11 @@ local notification = hs.notify.new({
 })
 if not notification then error("could not create the notification", 0) end
 notification:send()
-return { sent = true, title = ARGS.title }
+-- send() only hands the notification to Notification Center. Whether a banner
+-- appears is not observable from here: an active Focus mode files or
+-- suppresses it silently, and macOS offers no delivery receipt (#17). posted
+-- is the honest claim; sent=true used to imply more than anyone verified.
+return { posted = true, deliveryVerified = false, title = ARGS.title }
 `;
 
 export const peripheralsTool = defineTool({
@@ -108,7 +112,7 @@ export const notifyCenterTool = defineTool({
   tier: 'safe',
   title: 'Post a notification',
   description:
-    'Post a real macOS notification, which persists in Notification Center. Use this when the user should see something after stepping away. For a transient on-screen message that leaves no trace, use hs_notify instead.',
+    'Post a real macOS notification. Delivery cannot be verified from here: an active Focus mode silently suppresses or files the banner, so posted=true means handed to Notification Center, not necessarily seen. Use this when the user should see something after stepping away. For a transient on-screen message that ignores Focus modes and leaves no trace, use hs_notify instead.',
   inputSchema: z.object({
     title: z.string().min(1).max(120).describe('Notification title.'),
     text: z.string().max(500).default('').describe('Body text.'),

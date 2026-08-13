@@ -82,12 +82,17 @@ describe('every tool', () => {
       {}
     );
 
-    expect(calls).toHaveLength(1);
-    const lua = calls[0]?.lua ?? '';
-    expect(lua.length).toBeGreaterThan(0);
-    // The program must be a fixed constant, so no argument value may appear in it.
-    expect(lua).not.toContain('Safari');
-    expect(lua).not.toContain('return 1\n');
+    // Read-back tools legitimately run more than one program per call
+    // (act, then observe), so at least one rather than exactly one.
+    expect(calls.length).toBeGreaterThanOrEqual(1);
+    for (const call of calls) {
+      const lua = call.lua;
+      expect(lua.length).toBeGreaterThan(0);
+      // Every program must be a fixed constant, so no argument value may
+      // appear in any of them.
+      expect(lua).not.toContain('Safari');
+      expect(lua).not.toContain('return 1\n');
+    }
   });
 
   it.each(BRIDGE_TOOLS)(
@@ -157,6 +162,117 @@ describe('argument routing', () => {
     const result = await handlerFor('hs_reload_config', { bridge, docs: stubDocs })({}, {});
     expect(result.isError).not.toBe(true);
     expect(result.content[0]?.text).toContain('hs.ipc');
+  });
+});
+
+describe('read-back after acting (#17)', () => {
+  it('hs_move_window returns the observed frame and flags an adjustment', async () => {
+    const run = vi
+      .fn()
+      .mockResolvedValueOnce({ ok: true, value: { id: 7 } })
+      .mockResolvedValueOnce({
+        ok: true,
+        value: { id: 7, frame: { x: -960, y: 33, w: 1000, h: 600 } },
+      });
+    // Boundary cast: the fake implements the one method the handler uses.
+    const bridge = { hsPath: '/fake/hs', run } as unknown as HammerspoonBridge;
+
+    const result = await handlerFor('hs_move_window', { bridge, docs: stubDocs })(
+      { id: 7, x: -5000, y: -5000 },
+      {}
+    );
+
+    const payload = JSON.parse(result.content[0]?.text ?? '{}') as {
+      frame: Record<string, number>;
+      adjusted: boolean;
+      requested: Record<string, number>;
+    };
+    expect(payload.frame).toEqual({ x: -960, y: 33, w: 1000, h: 600 });
+    expect(payload.adjusted).toBe(true);
+    expect(payload.requested).toEqual({ x: -5000, y: -5000 });
+  });
+
+  it('hs_move_window reports adjusted=false when the frame landed as asked', async () => {
+    const run = vi
+      .fn()
+      .mockResolvedValueOnce({ ok: true, value: { id: 7 } })
+      .mockResolvedValueOnce({
+        ok: true,
+        value: { id: 7, frame: { x: 100, y: 100, w: 800, h: 600 } },
+      });
+    const bridge = { hsPath: '/fake/hs', run } as unknown as HammerspoonBridge;
+
+    const result = await handlerFor('hs_move_window', { bridge, docs: stubDocs })(
+      { id: 7, x: 100, y: 100, width: 800, height: 600 },
+      {}
+    );
+
+    const payload = JSON.parse(result.content[0]?.text ?? '{}') as {
+      adjusted: boolean;
+      requested?: unknown;
+    };
+    expect(payload.adjusted).toBe(false);
+    expect(payload.requested).toBeUndefined();
+  });
+
+  it('hs_goto_space verifies where the switch landed', async () => {
+    const run = vi
+      .fn()
+      .mockResolvedValueOnce({ ok: true, value: { id: 4, position: 2, method: 'keystroke' } })
+      .mockResolvedValue({ ok: true, value: { focused: 4 } });
+    const bridge = { hsPath: '/fake/hs', run } as unknown as HammerspoonBridge;
+
+    const result = await handlerFor('hs_goto_space', { bridge, docs: stubDocs })(
+      { position: 2 },
+      {}
+    );
+
+    const payload = JSON.parse(result.content[0]?.text ?? '{}') as {
+      arrived: boolean;
+      id: number;
+    };
+    expect(payload.arrived).toBe(true);
+    expect(payload.id).toBe(4);
+  });
+
+  it('hs_goto_space does not verify when it was already there', async () => {
+    const run = vi
+      .fn()
+      .mockResolvedValueOnce({ ok: true, value: { id: 4, position: 2, alreadyThere: true } });
+    const bridge = { hsPath: '/fake/hs', run } as unknown as HammerspoonBridge;
+
+    const result = await handlerFor('hs_goto_space', { bridge, docs: stubDocs })({ id: 4 }, {});
+
+    expect(run).toHaveBeenCalledTimes(1);
+    expect(result.content[0]?.text).toContain('alreadyThere');
+  });
+});
+
+describe('hs_open_url schema', () => {
+  function inputSchemaFor(name: string): { safeParse: (value: unknown) => { success: boolean } } {
+    const tool = ALL_TOOLS.find((candidate) => candidate.name === name);
+    if (tool === undefined) throw new Error(`no tool named ${name}`);
+
+    let schema: unknown;
+    const server = {
+      registerTool: (_name: string, config: Record<string, unknown>) => {
+        schema = config['inputSchema'];
+      },
+    };
+    tool.register(server as never, { bridge: fakeBridge(SUCCESS).bridge, docs: stubDocs });
+    // Boundary cast: the registered schema is a Zod object by construction.
+    return schema as { safeParse: (value: unknown) => { success: boolean } };
+  }
+
+  it('rejects a URL without a scheme before any Lua runs', () => {
+    const schema = inputSchemaFor('hs_open_url');
+    expect(schema.safeParse({ url: 'not a url at all' }).success).toBe(false);
+    expect(schema.safeParse({ url: 'example.com' }).success).toBe(false);
+  });
+
+  it('accepts a normal scheme://host URL', () => {
+    const schema = inputSchemaFor('hs_open_url');
+    expect(schema.safeParse({ url: 'https://example.com' }).success).toBe(true);
   });
 });
 

@@ -15,8 +15,24 @@ if ARGS.bundleId then
   return { url = url, openedWith = ARGS.bundleId }
 end
 
-hs.urlevent.openURL(url)
-return { url = url, openedWith = "default handler" }
+-- Not hs.urlevent.openURL: that helper ignores an unknown scheme's missing
+-- handler and dies inside the native layer with "incorrect type 'nil' for
+-- argument 2". Resolving the handler here gives a real error for a scheme
+-- nothing handles, and lets the result name the application actually used
+-- instead of the phrase "default handler" (#17).
+local scheme = string.match(url, "^(%a[%w+.-]*)://")
+if not scheme then
+  error("the URL must include a scheme followed by '://', like https://example.com", 0)
+end
+local handler = hs.urlevent.getDefaultHandler(scheme)
+if not handler or handler == "" then
+  error("nothing on this Mac handles '" .. scheme .. "://' URLs", 0)
+end
+local ok = hs.urlevent.openURLWithBundle(url, handler)
+if not ok then
+  error("macOS refused to open '" .. tostring(url) .. "' with " .. handler, 0)
+end
+return { url = url, openedWith = handler }
 `;
 
 const DEFAULT_BROWSER_LUA = lua`
@@ -35,12 +51,17 @@ export const openUrlTool = defineTool({
   tier: 'safe',
   title: 'Open a URL',
   description:
-    'Open a URL in the default browser, or in a specific application by bundle id (for example com.google.Chrome or com.apple.Safari). Use hs_list_apps to find bundle ids.',
+    'Open a URL in the default handler for its scheme, or in a specific application by bundle id (for example com.google.Chrome or com.apple.Safari). The result names the application that actually received the URL. Errors when nothing handles the scheme or macOS refuses. Use hs_list_apps to find bundle ids.',
   inputSchema: z.object({
     url: z
       .string()
       .min(1)
       .max(2000)
+      // hs.urlevent.openURL documents that the URL "must contain a scheme and
+      // '://'"; anything else used to be accepted and silently did nothing.
+      .regex(/^[A-Za-z][A-Za-z0-9+.-]*:\/\/\S+$/, {
+        message: "Must be a URL with a scheme, like https://example.com. Spaces aren't allowed.",
+      })
       .describe('The URL to open. Include the scheme, for example https://.'),
     bundleId: z
       .string()

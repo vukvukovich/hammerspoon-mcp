@@ -15,20 +15,63 @@ import { defineTool, fromBridge } from '../registry.js';
  * is not a handle registry: nothing is addressable and nothing needs releasing.
  */
 const SPEAK_LUA = lua`
+local voiceName = nil
+if ARGS.voice then
+  -- hs.speech.new documents nil for an unknown voice, but on macOS 26 it
+  -- happily returns a synthesiser using the default voice instead, so a typo
+  -- silently spoke in the wrong voice while echoing the bogus name (#17).
+  -- Validation has to happen against the list, not the constructor. Both the
+  -- short names and the full identifiers from hs_list_voices are accepted.
+  local wanted = string.lower(ARGS.voice)
+  local matches = {}
+  local short = hs.speech.availableVoices() or {}
+  local full = hs.speech.availableVoices(true) or {}
+  for index, name in ipairs(short) do
+    local id = full[index] or name
+    if string.lower(name) == wanted or string.lower(id) == wanted then
+      voiceName = id
+      break
+    end
+    if string.find(string.lower(name), wanted, 1, true) then matches[#matches + 1] = name end
+  end
+  -- A single substring match is unambiguous, so use it: modern voices only
+  -- exist under full identifiers ("Daniel" is com.apple.voice.compact.en-GB
+  -- .Daniel), and refusing the obvious one would punish every reasonable
+  -- caller. Several matches stay an error, because picking one silently is
+  -- exactly the bug this fixes.
+  if not voiceName and #matches == 1 then voiceName = matches[1] end
+  if not voiceName then
+    local hint = #matches > 0
+      and (" Did you mean one of: " .. table.concat(matches, ", ") .. "?") or ""
+    error("no voice named '" .. tostring(ARGS.voice) .. "'." .. hint
+      .. " Call hs_list_voices for the full list.", 0)
+  end
+end
+
 if _hsmcp_speaker and _hsmcp_speaker:isSpeaking() then
   _hsmcp_speaker:stop()
 end
 
-_hsmcp_speaker = ARGS.voice and hs.speech.new(ARGS.voice) or hs.speech.new()
+if voiceName then
+  _hsmcp_speaker = hs.speech.new(voiceName)
+else
+  _hsmcp_speaker = hs.speech.new()
+end
 if not _hsmcp_speaker then
-  error("could not create a speech synthesiser" .. (ARGS.voice and (" for voice " .. ARGS.voice) or ""), 0)
+  error("could not create a speech synthesiser", 0)
 end
 
 if ARGS.rate then _hsmcp_speaker:rate(ARGS.rate) end
 local started = _hsmcp_speaker:speak(ARGS.text)
 if not started then error("the synthesiser refused to speak that text", 0) end
 
-return { speaking = true, voice = _hsmcp_speaker:voice(), characters = #ARGS.text }
+-- Read the voice back from the synthesiser rather than echoing the request.
+-- The modern system voice is not in the legacy voice list and reads back
+-- empty, so name that case explicitly instead of returning "".
+local inUse = _hsmcp_speaker:voice()
+if inUse == nil or inUse == "" then inUse = voiceName or "system default" end
+
+return { speaking = true, voice = inUse, characters = #ARGS.text }
 `;
 
 const VOICES_LUA = lua`

@@ -20,6 +20,13 @@ import { applyFraction, LAYOUT_PRESETS } from '../../src/tools/safe/layout.js';
 const bridge = new HammerspoonBridge();
 const available = bridge.hsPath !== undefined;
 
+const READ_FRAME_PROBE_LUA = lua`
+local w = hs.window.get(ARGS.id)
+if not w then error("gone", 0) end
+local f = w:frame()
+return { frame = { x = f.x, y = f.y, w = f.w, h = f.h } }
+`;
+
 describe.skipIf(!available)('bridge against real Hammerspoon', () => {
   it('completes a round trip', async () => {
     const result = await bridge.run(lua`return "pong"`);
@@ -258,6 +265,141 @@ describe.skipIf(!available)('tool Lua executes against real Hammerspoon', () => 
   it('hs_audio_set_device lists the alternatives when nothing matches', async () => {
     const result = await runTool('hs_audio_set_device', { name: 'no-such-device-xyz' });
     expect(result.isError).toBe(true);
+  });
+
+  /**
+   * The #17 criterion: move a window somewhere impossible and assert the
+   * reported frame matches reality, not the request. Whether macOS clamps is
+   * app-dependent, so the assertion is reported == independently-observed,
+   * with the adjusted flag agreeing.
+   */
+  it('hs_move_window reports the frame the system actually applied', async () => {
+    const focused = await bridge.run(lua`
+local w = hs.window.focusedWindow()
+if not w then return nil end
+local f = w:frame()
+return { id = w:id(), frame = { x = f.x, y = f.y, w = f.w, h = f.h } }
+`);
+    expect(focused.ok).toBe(true);
+    if (!focused.ok || focused.value === undefined || focused.value === null) return;
+    const original = focused.value as { id: number; frame: Record<string, number> };
+
+    try {
+      const result = (await runTool('hs_move_window', {
+        id: original.id,
+        x: -5000,
+        y: -5000,
+      })) as unknown as { isError?: boolean; content: { text: string }[] };
+      expect(result.isError).not.toBe(true);
+
+      const payload = JSON.parse(result.content[0]?.text ?? '{}') as {
+        frame: { x: number; y: number };
+        adjusted: boolean;
+      };
+
+      const observed = await bridge.run(READ_FRAME_PROBE_LUA, { id: original.id });
+      expect(observed.ok).toBe(true);
+      if (!observed.ok) return;
+      const reality = observed.value as { frame: { x: number; y: number } };
+
+      expect(payload.frame.x).toBeCloseTo(reality.frame.x, 0);
+      expect(payload.frame.y).toBeCloseTo(reality.frame.y, 0);
+
+      const differs =
+        Math.abs(payload.frame.x - -5000) > 1 || Math.abs(payload.frame.y - -5000) > 1;
+      expect(payload.adjusted).toBe(differs);
+    } finally {
+      await bridge.run(
+        lua`
+local w = hs.window.get(ARGS.id)
+if w then w:setFrame({ x = ARGS.frame.x, y = ARGS.frame.y, w = ARGS.frame.w, h = ARGS.frame.h }) end
+return true
+`,
+        original
+      );
+    }
+  });
+
+  it('hs_open_url errors for a scheme nothing handles', async () => {
+    const result = (await runTool('hs_open_url', {
+      url: 'nosuchscheme00://probe',
+    })) as unknown as { isError?: boolean; content: { text: string }[] };
+    expect(result.isError).toBe(true);
+    expect(result.content[0]?.text).toContain('nothing on this Mac handles');
+  });
+
+  it('hs_speak rejects a nonexistent voice instead of speaking with another', async () => {
+    const result = (await runTool('hs_speak', {
+      text: 'this must never be spoken',
+      voice: 'DefinitelyNotAVoice',
+    })) as unknown as { isError?: boolean; content: { text: string }[] };
+    expect(result.isError).toBe(true);
+    expect(result.content[0]?.text).toContain('no voice named');
+  });
+
+  it('hs_speak reports the voice actually in use', async () => {
+    const result = (await runTool('hs_speak', {
+      text: 'test',
+      voice: 'Daniel',
+      rate: 400,
+    })) as unknown as { isError?: boolean; content: { text: string }[] };
+    expect(result.isError).not.toBe(true);
+    const payload = JSON.parse(result.content[0]?.text ?? '{}') as { voice: string };
+    expect(payload.voice.toLowerCase()).toContain('daniel');
+  });
+
+  it('hs_notification is honest about unverifiable delivery', async () => {
+    const result = (await runTool('hs_notification', {
+      title: 'hammerspoon-mcp integration test',
+      withdrawAfter: 5,
+    })) as unknown as { isError?: boolean; content: { text: string }[] };
+    expect(result.isError).not.toBe(true);
+    const payload = JSON.parse(result.content[0]?.text ?? '{}') as {
+      posted: boolean;
+      deliveryVerified: boolean;
+      sent?: boolean;
+    };
+    expect(payload.posted).toBe(true);
+    expect(payload.deliveryVerified).toBe(false);
+    expect(payload.sent).toBeUndefined();
+  });
+
+  /**
+   * A real switch to a different desktop and back, verified against
+   * hs.spaces.focusedSpace() independently of what the tool claims. Skips on a
+   * machine with a single desktop.
+   */
+  it('hs_goto_space actually lands on the requested desktop', async (ctx) => {
+    const listed = (await runTool('hs_list_spaces', {})) as unknown as {
+      content: { text: string }[];
+    };
+    const spaces = JSON.parse(listed.content[0]?.text ?? '[]') as {
+      id: number;
+      type: string;
+      isCurrent: boolean;
+    }[];
+    const current = spaces.find((space) => space.isCurrent);
+    const other = spaces.find((space) => space.type === 'user' && !space.isCurrent);
+    if (!current || !other) ctx.skip();
+    if (!current || !other) return;
+
+    try {
+      const result = (await runTool('hs_goto_space', { id: other.id })) as unknown as {
+        isError?: boolean;
+        content: { text: string }[];
+      };
+      expect(result.isError).not.toBe(true);
+      const payload = JSON.parse(result.content[0]?.text ?? '{}') as { arrived: boolean };
+      expect(payload.arrived).toBe(true);
+
+      const observed = await bridge.run(lua`return { focused = hs.spaces.focusedSpace() }`);
+      expect(observed.ok).toBe(true);
+      if (observed.ok) {
+        expect((observed.value as { focused: number }).focused).toBe(other.id);
+      }
+    } finally {
+      await runTool('hs_goto_space', { id: current.id });
+    }
   });
 
   it('hs_goto_space recognises the space it is already on', async () => {
