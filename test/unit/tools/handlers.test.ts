@@ -187,10 +187,12 @@ describe('argument routing', () => {
 
 describe('read-back after acting (#17)', () => {
   it('hs_move_window returns the observed frame and flags an adjustment', async () => {
+    // The frame read repeats: a diverging frame is re-polled until the settle
+    // budget runs out, so the read result is the terminal mock value.
     const run = vi
       .fn()
       .mockResolvedValueOnce({ ok: true, value: { id: 7 } })
-      .mockResolvedValueOnce({
+      .mockResolvedValue({
         ok: true,
         value: { id: 7, frame: { x: -960, y: 33, w: 1000, h: 600 } },
       });
@@ -216,7 +218,7 @@ describe('read-back after acting (#17)', () => {
     const run = vi
       .fn()
       .mockResolvedValueOnce({ ok: true, value: { id: 7 } })
-      .mockResolvedValueOnce({
+      .mockResolvedValue({
         ok: true,
         value: { id: 7, frame: { x: 100, y: 100, w: 800, h: 600 } },
       });

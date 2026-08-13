@@ -1,3 +1,5 @@
+import { setTimeout as sleep } from 'node:timers/promises';
+
 import { z } from 'zod';
 
 import { defineTool, fromBridge, jsonResult } from '../registry.js';
@@ -83,6 +85,11 @@ const FRAME_READ_SCHEMA = z.object({
  * very runloop, so the wait has to happen here, between two bridge calls.
  * Measured on a real machine: the correction landed between ~40ms and ~400ms
  * after the move.
+ *
+ * Deliberately a fixed wait, not a poll with early exit (#26): a frame that
+ * matches the request at 100ms can still be corrected at 300ms, so returning
+ * on the first match reports a placement that is about to change. Tried, and
+ * the integration test caught it doing exactly that.
  */
 const FRAME_SETTLE_MS = 400;
 
@@ -155,7 +162,7 @@ export const moveWindowTool = defineTool({
     const moved = await bridge.run(MOVE_WINDOW_LUA, args);
     if (!moved.ok) return fromBridge(moved);
 
-    await new Promise((resolve) => setTimeout(resolve, FRAME_SETTLE_MS));
+    await sleep(FRAME_SETTLE_MS);
 
     const read = await bridge.run(READ_WINDOW_FRAME_LUA, { id: args.id });
     if (!read.ok) return fromBridge(read);

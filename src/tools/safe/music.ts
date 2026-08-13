@@ -1,3 +1,5 @@
+import { setTimeout as sleep } from 'node:timers/promises';
+
 import { z } from 'zod';
 
 import { lua } from '../../bridge/lua.js';
@@ -149,7 +151,7 @@ export const musicControlTool = defineTool({
 
     let observed: z.infer<typeof MUSIC_READ_SCHEMA> | undefined;
     for (;;) {
-      await new Promise((resolve) => setTimeout(resolve, MUSIC_SETTLE_MS));
+      await sleep(MUSIC_SETTLE_MS);
       const status = await bridge.run(MUSIC_STATUS_LUA, { player: args.player });
       if (status.ok) {
         const parsed = MUSIC_READ_SCHEMA.safeParse(status.value);

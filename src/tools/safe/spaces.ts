@@ -1,3 +1,5 @@
+import { setTimeout as sleep } from 'node:timers/promises';
+
 import { z } from 'zod';
 
 import { lua } from '../../bridge/lua.js';
@@ -133,7 +135,7 @@ async function waitForSpace(
   const deadline = Date.now() + SPACE_POLL_BUDGET_MS;
   let last: number | undefined;
   for (;;) {
-    await new Promise((resolve) => setTimeout(resolve, SPACE_POLL_MS));
+    await sleep(SPACE_POLL_MS);
     const read = await bridge.run(FOCUSED_SPACE_LUA);
     if (read.ok) {
       const parsed = FOCUSED_SCHEMA.safeParse(read.value);
