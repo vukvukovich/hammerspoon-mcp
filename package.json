@@ -1,6 +1,6 @@
 {
   "name": "@vukvukovich/hammerspoon-mcp",
-  "version": "0.2.1",
+  "version": "0.3.0",
   "description": "MCP server for Hammerspoon. Injection-safe argument passing, tiered tool permissions, and Hammerspoon API docs search.",
   "mcpName": "io.github.vukvukovich/hammerspoon-mcp",
   "keywords": [
