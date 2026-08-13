@@ -20,31 +20,38 @@ if ARGS.voice then
   -- hs.speech.new documents nil for an unknown voice, but on macOS 26 it
   -- happily returns a synthesiser using the default voice instead, so a typo
   -- silently spoke in the wrong voice while echoing the bogus name (#17).
-  -- Validation has to happen against the list, not the constructor. Both the
-  -- short names and the full identifiers from hs_list_voices are accepted.
+  -- Validation has to happen against the list, not the constructor, and every
+  -- match must resolve to the FULL identifier before construction: modern
+  -- voices only exist under full identifiers, and handing the constructor a
+  -- bare short name quietly resurrects the default-voice fallback (#22).
   local wanted = string.lower(ARGS.voice)
-  local matches = {}
   local short = hs.speech.availableVoices() or {}
   local full = hs.speech.availableVoices(true) or {}
+  local exact, partial = {}, {}
   for index, name in ipairs(short) do
     local id = full[index] or name
     if string.lower(name) == wanted or string.lower(id) == wanted then
-      voiceName = id
-      break
+      exact[#exact + 1] = id
+    elseif string.find(string.lower(id), wanted, 1, true) then
+      partial[#partial + 1] = id
     end
-    if string.find(string.lower(name), wanted, 1, true) then matches[#matches + 1] = name end
   end
-  -- A single substring match is unambiguous, so use it: modern voices only
-  -- exist under full identifiers ("Daniel" is com.apple.voice.compact.en-GB
-  -- .Daniel), and refusing the obvious one would punish every reasonable
-  -- caller. Several matches stay an error, because picking one silently is
-  -- exactly the bug this fixes.
-  if not voiceName and #matches == 1 then voiceName = matches[1] end
-  if not voiceName then
-    local hint = #matches > 0
-      and (" Did you mean one of: " .. table.concat(matches, ", ") .. "?") or ""
-    error("no voice named '" .. tostring(ARGS.voice) .. "'." .. hint
-      .. " Call hs_list_voices for the full list.", 0)
+  -- A name shared by several voices (fourteen Eddys) must error rather than
+  -- silently pick a list order; one exact hit, or one unambiguous substring
+  -- hit, is used.
+  if #exact == 1 then
+    voiceName = exact[1]
+  elseif #exact > 1 then
+    error("several voices are named '" .. tostring(ARGS.voice)
+      .. "'. Pick one identifier: " .. table.concat(exact, ", "), 0)
+  elseif #partial == 1 then
+    voiceName = partial[1]
+  elseif #partial > 1 then
+    error("no voice named '" .. tostring(ARGS.voice) .. "'. Did you mean one of: "
+      .. table.concat(partial, ", ") .. "?", 0)
+  else
+    error("no voice named '" .. tostring(ARGS.voice)
+      .. "'. Call hs_list_voices for the full list.", 0)
   end
 end
 

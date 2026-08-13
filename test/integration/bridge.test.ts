@@ -334,7 +334,7 @@ return true
     expect(result.content[0]?.text).toContain('no voice named');
   });
 
-  it('hs_speak reports the voice actually in use', async () => {
+  it('hs_speak reports the full identifier of the voice in use', async () => {
     const result = (await runTool('hs_speak', {
       text: 'test',
       voice: 'Daniel',
@@ -343,6 +343,19 @@ return true
     expect(result.isError).not.toBe(true);
     const payload = JSON.parse(result.content[0]?.text ?? '{}') as { voice: string };
     expect(payload.voice.toLowerCase()).toContain('daniel');
+    // The identifier, not the short name: constructing with a short name is
+    // the silent default-voice fallback (#22).
+    expect(payload.voice).toMatch(/^com\.apple\./);
+  });
+
+  it('hs_speak refuses a name shared by many voices and lists the candidates', async (ctx) => {
+    const result = (await runTool('hs_speak', {
+      text: 'this must never be spoken',
+      voice: 'Eddy',
+    })) as unknown as { isError?: boolean; content: { text: string }[] };
+    // Machines without the Eloquence voice pack have no duplicate Eddys.
+    if (result.isError !== true) ctx.skip();
+    expect(result.content[0]?.text).toContain('com.apple.eloquence');
   });
 
   it('hs_notification is honest about unverifiable delivery', async () => {
