@@ -266,6 +266,39 @@ describe('read-back after acting (#17)', () => {
     expect(payload.id).toBe(7);
   }, 10_000);
 
+  // A slow track transition keeps reporting the pre-skip song; next/previous
+  // must poll past it rather than trust one settled read (#24).
+  it('hs_music_control next polls until the reported track moves', async () => {
+    let statusReads = 0;
+    const run = vi.fn((luaSource: string) => {
+      if (luaSource.includes('unknown action')) {
+        return Promise.resolve({
+          ok: true,
+          value: { player: 'spotify', action: 'next', before: 'Old Song' },
+        });
+      }
+      statusReads += 1;
+      return Promise.resolve({
+        ok: true,
+        value: {
+          state: 'playing',
+          isPlaying: true,
+          track: statusReads === 1 ? 'Old Song' : 'New Song',
+        },
+      });
+    });
+    const bridge = { hsPath: '/fake/hs', run } as unknown as HammerspoonBridge;
+
+    const result = await handlerFor('hs_music_control', { bridge, docs: stubDocs })(
+      { player: 'spotify', action: 'next' },
+      {}
+    );
+
+    const payload = JSON.parse(result.content[0]?.text ?? '{}') as { track: string };
+    expect(payload.track).toBe('New Song');
+    expect(statusReads).toBeGreaterThanOrEqual(2);
+  }, 10_000);
+
   it('hs_goto_space does not verify when it was already there', async () => {
     const run = vi
       .fn()

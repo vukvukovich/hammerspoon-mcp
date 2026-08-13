@@ -24,6 +24,8 @@ local scheme = string.match(url, "^(%a[%w+.-]*)://")
 if not scheme then
   error("the URL must include a scheme followed by '://', like https://example.com", 0)
 end
+-- Schemes are case-insensitive; the handler lookup may not be (#24).
+scheme = string.lower(scheme)
 local handler = hs.urlevent.getDefaultHandler(scheme)
 if not handler or handler == "" then
   error("nothing on this Mac handles '" .. scheme .. "://' URLs", 0)

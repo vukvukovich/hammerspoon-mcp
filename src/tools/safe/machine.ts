@@ -13,14 +13,22 @@ local function safe(fn)
   return nil
 end
 
+-- hs.json encodes a table holding only nils as a bare [] instead of an
+-- object, so EVERY sub-table below carries at least one field that cannot be
+-- nil: a presence boolean where absence is meaningful (battery, audio,
+-- network), a defaulted value where it is not (#24).
+local batteryPercentage = safe(function() return hs.battery.percentage() end)
+local outputDevice = safe(function() return hs.audiodevice.defaultOutputDevice() end)
+
 return {
   host = {
-    name = safe(function() return hs.host.localizedName() end),
+    name = safe(function() return hs.host.localizedName() end) or "unknown",
     os = safe(function() return hs.host.operatingSystemVersionString() end),
     idleSeconds = safe(function() return math.floor(hs.host.idleTime()) end),
   },
   battery = {
-    percentage = safe(function() return hs.battery.percentage() end),
+    present = batteryPercentage ~= nil,
+    percentage = batteryPercentage,
     powerSource = safe(function() return hs.battery.powerSource() end),
     isCharging = safe(function() return hs.battery.isCharging() end),
     minutesRemaining = safe(function()
@@ -32,15 +40,14 @@ return {
   },
   display = {
     brightness = safe(function() return hs.brightness.get() end),
-    screens = safe(function() return #hs.screen.allScreens() end),
+    screens = safe(function() return #hs.screen.allScreens() end) or 0,
   },
-  -- wifiPower is always present, so this encodes as an object even when no
-  -- network is joined; a table holding only nils encoded as a bare [] (#18).
   network = {
     wifiPower = safe(function() return hs.wifi.interfaceDetails().power end) == true,
     wifiSsid = safe(function() return hs.wifi.currentNetwork() end),
   },
   audio = {
+    available = outputDevice ~= nil,
     outputDevice = safe(function() return hs.audiodevice.defaultOutputDevice():name() end),
     volume = safe(function() return hs.audiodevice.defaultOutputDevice():volume() end),
     muted = safe(function() return hs.audiodevice.defaultOutputDevice():muted() end),
