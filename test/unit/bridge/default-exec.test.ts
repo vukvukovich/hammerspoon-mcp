@@ -61,33 +61,86 @@ describe('the real subprocess path', () => {
     expect(result.error.kind).toBe('ProtocolError');
   });
 
-  it('kills a child that outruns the timeout', async () => {
+  // A timed-out child is deliberately NOT killed at the deadline: its message
+  // port must survive long enough to receive Hammerspoon's late reply, or
+  // Hammerspoon crashes replying into a dead port (#13, #16). The caller is
+  // unblocked at the deadline; the child is reaped after the linger.
+  it('rejects at the deadline without waiting for the child', async () => {
     // Driven directly, because the bridge always sends ['-c', program] and no
     // useful binary blocks on that shape.
     const started = Date.now();
     await expect(
-      spawnExec('/bin/sleep', ['30'], { timeout: 300, maxBuffer: 1024 })
+      spawnExec('/bin/sleep', ['30'], { timeout: 300, maxBuffer: 1024, lingerMs: 200 })
     ).rejects.toMatchObject({ killed: true, signal: 'SIGTERM' });
 
-    // Proves the child was actually killed rather than awaited.
+    // The rejection must arrive at the deadline, not after the child dies.
     expect(Date.now() - started).toBeLessThan(3000);
   });
 
-  // SIGTERM is catchable. A child that ignores it never emits 'close', so
-  // without escalation the promise stayed pending forever and the MCP call
-  // hung with the client waiting indefinitely. SIGKILL cannot be caught.
-  it('escalates to SIGKILL when a child ignores SIGTERM, so the promise always settles', async () => {
-    const stubborn = `process.on('SIGTERM', () => {}); setInterval(() => {}, 1000);`;
-    const started = Date.now();
+  it('reaps a lingering child after the linger period, so nothing leaks', async () => {
+    const marker = `linger-reap-probe-${String(process.pid)}`;
+    const stubborn = `process.title=${JSON.stringify(marker)}; setInterval(() => {}, 1000); // ${marker}`;
 
     await expect(
-      spawnExec(process.execPath, ['-e', stubborn], { timeout: 500, maxBuffer: 1024 })
+      spawnExec(process.execPath, ['-e', stubborn], {
+        timeout: 300,
+        maxBuffer: 1024,
+        lingerMs: 200,
+      })
     ).rejects.toMatchObject({ killed: true });
 
-    const elapsed = Date.now() - started;
-    // Must wait out the grace period, but must not hang.
-    expect(elapsed).toBeGreaterThanOrEqual(500);
-    expect(elapsed).toBeLessThan(10_000);
+    // SIGTERM lands after ~lingerMs and node dies of it; poll until gone.
+    const { execFile } = await import('node:child_process');
+    const { promisify } = await import('node:util');
+    const exec = promisify(execFile);
+    const gone = async (): Promise<boolean> => {
+      try {
+        await exec('/usr/bin/pgrep', ['-f', marker]);
+        return false;
+      } catch {
+        return true;
+      }
+    };
+    const deadline = Date.now() + 8000;
+    while (!(await gone()) && Date.now() < deadline) {
+      await new Promise((resolve) => setTimeout(resolve, 200));
+    }
+    expect(await gone()).toBe(true);
+  }, 15_000);
+
+  // SIGTERM is catchable. A child that ignores it never emits 'close', so
+  // without escalation it would live past the linger forever. SIGKILL cannot
+  // be caught. The promise itself settles at the deadline either way; what
+  // this proves is that the escalation still reaps the child afterwards.
+  it('escalates to SIGKILL when a lingering child ignores SIGTERM', async () => {
+    const marker = `sigkill-escalation-probe-${String(process.pid)}`;
+    const stubborn = `process.on('SIGTERM', () => {}); setInterval(() => {}, 1000); // ${marker}`;
+
+    await expect(
+      spawnExec(process.execPath, ['-e', stubborn], {
+        timeout: 300,
+        maxBuffer: 1024,
+        lingerMs: 200,
+      })
+    ).rejects.toMatchObject({ killed: true });
+
+    const { execFile } = await import('node:child_process');
+    const { promisify } = await import('node:util');
+    const exec = promisify(execFile);
+    const gone = async (): Promise<boolean> => {
+      try {
+        await exec('/usr/bin/pgrep', ['-f', marker]);
+        return false;
+      } catch {
+        return true;
+      }
+    };
+    // linger 200ms + SIGTERM ignored + 2s SIGKILL grace: dead well inside 8s.
+    const deadline = Date.now() + 8000;
+    while (!(await gone()) && Date.now() < deadline) {
+      await new Promise((resolve) => setTimeout(resolve, 200));
+    }
+    expect(await gone()).toBe(true);
   }, 15_000);
 
   it('captures stdout from a successful child', async () => {

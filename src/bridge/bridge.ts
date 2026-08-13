@@ -41,6 +41,23 @@ const MAX_OUTPUT_BYTES = 8 * 1024 * 1024;
 const SIGKILL_GRACE_MS = 2000;
 
 /**
+ * How long a timed-out child may keep running before the kill begins.
+ *
+ * Killing at the deadline is what crashed Hammerspoon (#13, #16): the child's
+ * CFMessagePort dies with Hammerspoon's reply still pending, and on macOS 26
+ * Hammerspoon sending into that invalidated port is a pointer-authentication
+ * EXC_BREAKPOINT that takes the whole app down. Reproduced three suite runs
+ * in a row, one crash each, always at the deliberately timed-out call.
+ *
+ * So a timeout now unblocks the caller at the deadline but leaves the child
+ * alive: when Hammerspoon wakes and replies, the port is still valid, the CLI
+ * exits on its own, and nothing crashes. The kill only happens if the child
+ * is still there after this long, as a backstop against a truly wedged
+ * Hammerspoon, where no reply is coming anyway.
+ */
+const TIMEOUT_LINGER_MS = 30_000;
+
+/**
  * Ceiling on `hs` processes in flight at once, across every bridge instance.
  *
  * Each invocation opens its own CFMessagePort to Hammerspoon, and that channel
@@ -119,7 +136,12 @@ export type ExecResult = { readonly stdout: string; readonly stderr: string };
 export type ExecFn = (
   file: string,
   args: readonly string[],
-  options: { readonly timeout: number; readonly maxBuffer: number }
+  options: {
+    readonly timeout: number;
+    readonly maxBuffer: number;
+    /** Test override for TIMEOUT_LINGER_MS; production callers omit it. */
+    readonly lingerMs?: number;
+  }
 ) => Promise<ExecResult>;
 
 export type BridgeOptions = {
@@ -170,7 +192,6 @@ export const spawnExec: ExecFn = async (file, args, options) =>
     let stdout = '';
     let stderr = '';
     let settled = false;
-    let timedOut = false;
     let overflowed = false;
 
     /**
@@ -185,14 +206,36 @@ export const spawnExec: ExecFn = async (file, args, options) =>
     let killTimer: NodeJS.Timeout | undefined;
     const terminate = (): void => {
       child.kill('SIGTERM');
-      killTimer ??= setTimeout(() => {
-        child.kill('SIGKILL');
-      }, SIGKILL_GRACE_MS);
+      if (killTimer === undefined) {
+        killTimer = setTimeout(() => {
+          child.kill('SIGKILL');
+        }, SIGKILL_GRACE_MS);
+        // A kill of an already-lingering child must not keep the parent alive.
+        killTimer.unref();
+      }
     };
 
+    let lingerTimer: NodeJS.Timeout | undefined;
+
     const timer = setTimeout(() => {
-      timedOut = true;
-      terminate();
+      // Unblock the caller at the deadline, but do NOT kill the child yet:
+      // its message port must stay valid until Hammerspoon's late reply has
+      // landed, or Hammerspoon crashes replying into a dead port. See
+      // TIMEOUT_LINGER_MS. The child usually exits by itself moments later;
+      // the linger timer is the backstop, and it must not keep the parent
+      // process alive on its own.
+      settle(() => {
+        reject(
+          Object.assign(new Error('Timed out waiting for Hammerspoon.'), {
+            killed: true,
+            signal: 'SIGTERM',
+            stdout,
+            stderr,
+          })
+        );
+      });
+      lingerTimer = setTimeout(terminate, options.lingerMs ?? TIMEOUT_LINGER_MS);
+      lingerTimer.unref();
     }, options.timeout);
 
     const settle = (action: () => void): void => {
@@ -224,6 +267,9 @@ export const spawnExec: ExecFn = async (file, args, options) =>
     });
 
     child.on('close', (code, signal) => {
+      // A lingering timed-out child that exits naturally no longer needs its
+      // backstop kill.
+      if (lingerTimer !== undefined) clearTimeout(lingerTimer);
       settle(() => {
         // Flush whatever the decoders were holding. A process killed mid
         // character leaves a partial sequence, and end() turns it into the
@@ -233,17 +279,6 @@ export const spawnExec: ExecFn = async (file, args, options) =>
 
         if (overflowed) {
           reject(new Error(`Output exceeded ${String(options.maxBuffer)} bytes.`));
-          return;
-        }
-        if (timedOut) {
-          reject(
-            Object.assign(new Error('Timed out waiting for Hammerspoon.'), {
-              killed: true,
-              signal: 'SIGTERM',
-              stdout,
-              stderr,
-            })
-          );
           return;
         }
         if (code !== 0) {

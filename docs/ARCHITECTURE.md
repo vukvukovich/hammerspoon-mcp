@@ -366,6 +366,20 @@ name "completes without hanging, which proves stdin is closed", spawning Node
 itself so it still runs in continuous integration. If that test ever starts
 timing out, stdin handling has regressed.
 
+### A timed-out child is not killed at the deadline
+
+The caller gets its `Timeout` error the moment the deadline passes, but the
+`hs` child process is left running for up to 30 more seconds. This is a crash
+fix, not laziness. Each invocation holds a CFMessagePort with Hammerspoon's
+reply pending; killing the child invalidates that port, and on macOS 26
+Hammerspoon crashes with a pointer-authentication `EXC_BREAKPOINT` the moment
+it wakes and sends its reply into the dead port. Reproduced three integration
+runs in a row, one Hammerspoon crash each, always at the deliberately
+timed-out call, and zero crashes with the linger in place. The lingering child
+receives the late reply, exits on its own, and is force-killed only if it is
+still there after the linger, which means Hammerspoon is wedged and no reply
+is coming anyway.
+
 Timeouts are **per tool**, declared in the tool's spec, not one global number.
 `hs_list_windows` should answer in well under a second. `hs_reload_config` runs
 the user's whole `init.lua` and reasonably takes longer. A single timeout would
@@ -486,14 +500,14 @@ Errors are built by a small constructor per kind (`hsNotFound`, `hsNotRunning`,
 literal objects at call sites. That keeps the wording of a given failure in one
 place, so improving a hint improves it everywhere.
 
-| Kind              | Detected by                                                                                                   | Hint returned to the agent                                                                                          |
-| ----------------- | ------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------- |
-| `HsNotFound`      | No candidate path exists, or `execFile` fails with `ENOENT`.                                                  | Install Hammerspoon, add `require("hs.ipc")`, or set `HS_MCP_HS_PATH`. The hint lists every path that was searched. |
-| `HsNotRunning`    | The binary exists but the CLI cannot reach the app: non-zero exit, no result line, connection-shaped failure. | Open Hammerspoon, confirm `require("hs.ipc")` is in `init.lua`, reload the config.                                  |
-| `LuaError`        | A well-formed result line with `ok: false`. The Lua ran and threw.                                            | Check the arguments, or call `hs_console_tail` for the surrounding log output. The Lua message is carried through.  |
-| `Timeout`         | `execFile` kills the child at the per-tool deadline.                                                          | Hammerspoon may be blocked by a long-running Lua call or a modal dialog. Check the console, prefer smaller calls.   |
-| `PayloadTooLarge` | The encoded ARGS blob exceeds the configured byte limit, checked before spawning anything.                    | Pass less data. Oversized payloads risk hitting the operating system's argument size limit.                         |
-| `ProtocolError`   | The process exited cleanly but no line parsed as our result shape.                                            | This is a bug in the server, report it with the stderr log. The raw output is attached as `detail`.                 |
+| Kind              | Detected by                                                                                                     | Hint returned to the agent                                                                                          |
+| ----------------- | --------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------- |
+| `HsNotFound`      | No candidate path exists, or `execFile` fails with `ENOENT`.                                                    | Install Hammerspoon, add `require("hs.ipc")`, or set `HS_MCP_HS_PATH`. The hint lists every path that was searched. |
+| `HsNotRunning`    | The binary exists but the CLI cannot reach the app: non-zero exit, no result line, connection-shaped failure.   | Open Hammerspoon, confirm `require("hs.ipc")` is in `init.lua`, reload the config.                                  |
+| `LuaError`        | A well-formed result line with `ok: false`. The Lua ran and threw.                                              | Check the arguments, or call `hs_console_tail` for the surrounding log output. The Lua message is carried through.  |
+| `Timeout`         | The per-tool deadline passes with no reply. The caller is unblocked immediately; the child lingers (see below). | Hammerspoon may be blocked by a long-running Lua call or a modal dialog. Check the console, prefer smaller calls.   |
+| `PayloadTooLarge` | The encoded ARGS blob exceeds the configured byte limit, checked before spawning anything.                      | Pass less data. Oversized payloads risk hitting the operating system's argument size limit.                         |
+| `ProtocolError`   | The process exited cleanly but no line parsed as our result shape.                                              | This is a bug in the server, report it with the stderr log. The raw output is attached as `detail`.                 |
 
 `PayloadTooLarge` is a pre-flight check, not a reaction to a failure. Base64
 inflates a payload by about a third, and `execFile` passes the program as a
