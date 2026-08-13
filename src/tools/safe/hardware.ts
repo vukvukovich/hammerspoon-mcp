@@ -52,20 +52,34 @@ return { usb = usb, cameras = cameras, volumes = volumes }
 `;
 
 const WIFI_SCAN_LUA = lua`
+-- "scanned=true, found nothing" and "the radio is off" are different facts,
+-- and reporting the first while the second is true sent callers hunting for
+-- networks that were never looked for (#18). Read the radio state first and
+-- do not pretend to scan without it.
+local details = nil
+pcall(function() details = hs.wifi.interfaceDetails() end)
+local radioOn = details ~= nil and details.power == true
+
 local current = hs.wifi.currentNetwork()
 local networks = {}
+local scanned = false
 
--- availableNetworks does a live scan and can be slow or blocked by privacy
--- settings, so a failure here should still return the current network.
-local ok, scanned = pcall(function() return hs.wifi.availableNetworks() end)
-if ok and scanned then
-  for _, ssid in ipairs(scanned) do networks[#networks + 1] = ssid end
-  table.sort(networks)
+if radioOn then
+  -- availableNetworks does a live scan and can be slow or blocked by privacy
+  -- settings, so a failure here should still return the current network.
+  local ok, found = pcall(function() return hs.wifi.availableNetworks() end)
+  if ok and found then
+    scanned = true
+    for _, ssid in ipairs(found) do networks[#networks + 1] = ssid end
+    table.sort(networks)
+  end
 end
 
 return {
+  radio = radioOn and "on" or "off",
+  connected = current ~= nil,
   current = current,
-  scanned = ok,
+  scanned = scanned,
   available = networks,
 }
 `;
@@ -101,7 +115,7 @@ export const wifiTool = defineTool({
   tier: 'safe',
   title: 'Show wifi networks',
   description:
-    'Report the current wifi network and scan for available ones. Scanning can be slow or blocked by privacy settings, in which case the current network is still reported and `scanned` is false.',
+    'Report the wifi radio state, the current network, and scan for available ones. radio="off" means no scan was attempted. scanned=false with the radio on means the scan was blocked or failed, in which case the current network is still reported.',
   inputSchema: z.object({}),
   annotations: { readOnlyHint: true },
   handler: async (_args, { bridge }) => fromBridge(await bridge.run(WIFI_SCAN_LUA)),

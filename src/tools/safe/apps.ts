@@ -6,15 +6,26 @@ import { lua } from '../../bridge/lua.js';
 const LIST_APPS_LUA = lua`
 local filter = ARGS.query
 if filter then filter = string.lower(filter) end
+
+-- Per-app isFrontmost() can be true for an app AND its XPC helper at once,
+-- which produced two "frontmost" rows. One authority instead: the pid of
+-- hs.application.frontmostApplication().
+local front = hs.application.frontmostApplication()
+local frontPid = front and front:pid() or -1
+
 local out = {}
 for _, app in ipairs(hs.application.runningApplications()) do
   local name = app:name()
-  if name and ((not filter) or string.find(string.lower(name), filter, 1, true)) then
+  -- kind() == -1 is a process forbidden from having a UI. Those are plumbing
+  -- (XPC services, helpers), not applications anyone can interact with, and
+  -- listing them buries the real apps in noise.
+  if name and app:kind() >= 0
+    and ((not filter) or string.find(string.lower(name), filter, 1, true)) then
     out[#out + 1] = {
       name = name,
       pid = app:pid(),
       bundleId = app:bundleID() or "",
-      isFrontmost = app:isFrontmost(),
+      isFrontmost = app:pid() == frontPid,
       windowCount = #app:allWindows(),
     }
   end

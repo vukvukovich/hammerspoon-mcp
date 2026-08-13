@@ -71,19 +71,46 @@ if not started then error("the synthesiser refused to speak that text", 0) end
 local inUse = _hsmcp_speaker:voice()
 if inUse == nil or inUse == "" then inUse = voiceName or "system default" end
 
-return { speaking = true, voice = inUse, characters = #ARGS.text }
+-- utf8.len counts characters; # counts bytes and overcounts anything outside
+-- ASCII. It returns nil for invalid UTF-8, where bytes are the only truth.
+return { speaking = true, voice = inUse, characters = utf8.len(ARGS.text) or #ARGS.text }
 `;
 
 const VOICES_LUA = lua`
-local voices = hs.speech.availableVoices() or {}
-local names = {}
-for _, voice in ipairs(voices) do
-  -- Entries are full identifiers such as com.apple.voice.compact.en-GB.Daniel.
-  -- The trailing component is the name a person would say.
-  names[#names + 1] = string.match(voice, "([^%.]+)$") or voice
+local short = hs.speech.availableVoices() or {}
+local full = hs.speech.availableVoices(true) or {}
+
+local out = {}
+for index, name in ipairs(short) do
+  local id = full[index] or name
+  local entry = { id = id }
+
+  -- attributesForVoice only knows legacy voices; asked about a modern
+  -- identifier it silently answers with the DEFAULT voice's attributes, so
+  -- trust it only when the identifier it returns is the one asked about.
+  local attrs = hs.speech.attributesForVoice(name)
+  if attrs and attrs.VoiceIdentifier == id then
+    entry.name = attrs.VoiceName or name
+    entry.language = attrs.VoiceLanguage
+    if attrs.VoiceGender then
+      entry.gender = string.lower(string.gsub(attrs.VoiceGender, "^VoiceGender", ""))
+    end
+  else
+    -- Modern identifiers carry their facts in the name itself:
+    -- com.apple.eloquence.en-GB.Eddy. Gender is not derivable, so it is
+    -- omitted rather than guessed.
+    entry.name = string.match(id, "([^%.]+)$") or id
+    entry.language = string.match(id, "%.(%a%a[-_]%a%a)%.")
+  end
+
+  out[#out + 1] = entry
 end
-table.sort(names)
-return { count = #names, voices = names }
+
+table.sort(out, function(a, b)
+  if a.name ~= b.name then return a.name < b.name end
+  return (a.language or "") < (b.language or "")
+end)
+return { count = #out, voices = out }
 `;
 
 const NETWORK_LUA = lua`
@@ -113,12 +140,13 @@ if ARGS.host then
   -- based and could never complete inside one hs invocation.
   local watcher = safe(function() return hs.network.reachability.forHostName(ARGS.host) end, nil)
   if watcher then
+    -- The raw flags bitmask stays internal; the two decoded booleans are the
+    -- only part of it a caller can act on (#18).
     local flags = watcher:status()
     result.host = {
       name = ARGS.host,
       reachable = (flags & hs.network.reachability.flags.reachable) ~= 0,
       requiresConnection = (flags & hs.network.reachability.flags.connectionRequired) ~= 0,
-      flags = flags,
     }
   end
 end
@@ -157,7 +185,10 @@ if not ARGS.key then error("key is required for get, set, and delete", 0) end
 local full = PREFIX .. ARGS.key
 
 if ARGS.action == "get" then
-  return { key = ARGS.key, value = hs.settings.get(full) }
+  -- A nil value vanishes from the JSON encoding, which made "missing" and
+  -- "stored empty" indistinguishable (#18). found says which one it is.
+  local value = hs.settings.get(full)
+  return { key = ARGS.key, value = value, found = value ~= nil }
 end
 
 if ARGS.action == "set" then
@@ -202,7 +233,8 @@ export const listVoicesTool = defineTool({
   name: 'hs_list_voices',
   tier: 'safe',
   title: 'List speech voices',
-  description: 'List the installed speech synthesiser voices usable with hs_speak.',
+  description:
+    'List the installed speech synthesiser voices with name, language, gender where the system reports it, and the full identifier. Names repeat across languages (fourteen Eddys), so pass the identifier to hs_speak when the name alone is ambiguous.',
   inputSchema: z.object({}),
   annotations: { readOnlyHint: true, idempotentHint: true },
   handler: async (_args, { bridge }) => fromBridge(await bridge.run(VOICES_LUA)),

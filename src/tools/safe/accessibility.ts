@@ -47,9 +47,12 @@ local textFilter = ARGS.contains and string.lower(ARGS.contains) or nil
 local visited = 0
 local truncated = false
 
+-- An empty string is "no label", not a label: Chrome sets AXTitle to "" on
+-- most controls and keeps the real name in AXDescription, and Lua's truthiness
+-- would stop the fallback chain at the "" (#18).
 local function attr(element, name)
   local ok, value = pcall(function() return element:attributeValue(name) end)
-  if ok and type(value) == "string" then return value end
+  if ok and type(value) == "string" and value ~= "" then return value end
   return nil
 end
 

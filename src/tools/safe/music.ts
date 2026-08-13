@@ -1,7 +1,7 @@
 import { z } from 'zod';
 
 import { lua } from '../../bridge/lua.js';
-import { defineTool, fromBridge } from '../registry.js';
+import { defineTool, fromBridge, jsonResult } from '../registry.js';
 
 /**
  * Player-specific music control.
@@ -26,6 +26,15 @@ local function playerFor(name)
   return module, appName, running
 end
 
+-- The modules return raw AppleScript four-character codes (kPSP, kPSp, kPSS);
+-- their own state_* constants are the decoder ring (#18).
+local function readableState(module, state)
+  if state == module.state_playing then return "playing" end
+  if state == module.state_paused then return "paused" end
+  if state == module.state_stopped then return "stopped" end
+  return "unknown"
+end
+
 local function describe(name)
   local module, appName, running = playerFor(name)
   if not running then
@@ -38,7 +47,7 @@ local function describe(name)
       player = name,
       app = appName,
       running = true,
-      state = state,
+      state = readableState(module, state),
       isPlaying = state == module.state_playing,
       track = module.getCurrentTrack(),
       artist = module.getCurrentArtist(),
@@ -72,13 +81,22 @@ elseif action == "next" then module.next()
 elseif action == "previous" then module.previous()
 else error("unknown action " .. tostring(action), 0) end
 
-return {
-  player = ARGS.player,
-  action = action,
-  state = module.getPlaybackState(),
-  track = module.getCurrentTrack(),
-}
+-- No state here: the player updates what it reports a moment after the
+-- command, so a read now claims the pre-action state ("play" answered
+-- "paused", #18). The handler waits and asks again.
+return { player = ARGS.player, action = action }
 `;
+
+const MUSIC_READ_SCHEMA = z.looseObject({
+  state: z.string().optional(),
+  isPlaying: z.boolean().optional(),
+  track: z.string().nullish(),
+});
+
+/** How long the player gets to catch its reported state up with the command
+ * it just executed. Measured: Spotify still answered the old state when asked
+ * immediately, and was correct by the next separate call. */
+const MUSIC_SETTLE_MS = 250;
 
 export const musicStatusTool = defineTool({
   name: 'hs_music_status',
@@ -101,10 +119,30 @@ export const musicControlTool = defineTool({
   tier: 'safe',
   title: 'Control a specific music player',
   description:
-    'Play, pause, or skip in Spotify or the Music app specifically. Use this instead of hs_media_control when more than one player could respond to a media key. Errors rather than launching the app if it is not already running.',
+    'Play, pause, or skip in Spotify or the Music app specifically. Use this instead of hs_media_control when more than one player could respond to a media key. The reported state is read back after the action settles, so it reflects what the player is now doing. Errors rather than launching the app if it is not already running.',
   inputSchema: z.object({
     player: z.enum(['spotify', 'music']).describe('Which player to control.'),
     action: z.enum(['play', 'pause', 'playpause', 'next', 'previous']).describe('What to do.'),
   }),
-  handler: async (args, { bridge }) => fromBridge(await bridge.run(MUSIC_CONTROL_LUA, args)),
+  handler: async (args, { bridge }) => {
+    const acted = await bridge.run(MUSIC_CONTROL_LUA, args);
+    if (!acted.ok) return fromBridge(acted);
+
+    await new Promise((resolve) => setTimeout(resolve, MUSIC_SETTLE_MS));
+
+    const status = await bridge.run(MUSIC_STATUS_LUA, { player: args.player });
+    if (!status.ok) return fromBridge(acted);
+    const parsed = MUSIC_READ_SCHEMA.safeParse(status.value);
+    if (!parsed.success) return fromBridge(acted);
+
+    return jsonResult({
+      player: args.player,
+      action: args.action,
+      ...(parsed.data.state === undefined ? {} : { state: parsed.data.state }),
+      ...(parsed.data.isPlaying === undefined ? {} : { isPlaying: parsed.data.isPlaying }),
+      ...(parsed.data.track === undefined || parsed.data.track === null
+        ? {}
+        : { track: parsed.data.track }),
+    });
+  },
 });

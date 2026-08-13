@@ -421,6 +421,99 @@ return true
     expect(result.content[0]?.text).toContain('alreadyThere');
   });
 
+  it('hs_list_voices distinguishes same-named voices by language and id (#18)', async () => {
+    const result = (await runTool('hs_list_voices', {})) as unknown as {
+      content: { text: string }[];
+    };
+    const payload = JSON.parse(result.content[0]?.text ?? '{}') as {
+      voices: { name: string; id: string; language?: string }[];
+    };
+    expect(payload.voices.length).toBeGreaterThan(0);
+
+    const ids = new Set(payload.voices.map((voice) => voice.id));
+    expect(ids.size).toBe(payload.voices.length);
+
+    // The named duplicates that motivated the fix must be tellable apart.
+    const eddys = payload.voices.filter((voice) => voice.name === 'Eddy');
+    if (eddys.length > 1) {
+      const languages = new Set(eddys.map((voice) => voice.language));
+      expect(languages.size).toBe(eddys.length);
+    }
+  });
+
+  it('hs_wifi never claims a scan the radio could not have run (#18)', async () => {
+    const result = (await runTool('hs_wifi', {})) as unknown as {
+      content: { text: string }[];
+    };
+    const payload = JSON.parse(result.content[0]?.text ?? '{}') as {
+      radio: string;
+      scanned: boolean;
+      connected: boolean;
+      available: string[];
+    };
+    expect(['on', 'off']).toContain(payload.radio);
+    expect(typeof payload.connected).toBe('boolean');
+    if (payload.radio === 'off') {
+      expect(payload.scanned).toBe(false);
+      expect(payload.available).toEqual([]);
+    }
+  });
+
+  it('hs_list_apps marks exactly one application frontmost (#18)', async () => {
+    const result = (await runTool('hs_list_apps', {})) as unknown as {
+      content: { text: string }[];
+    };
+    const apps = JSON.parse(result.content[0]?.text ?? '[]') as { isFrontmost: boolean }[];
+    expect(apps.filter((app) => app.isFrontmost)).toHaveLength(1);
+  });
+
+  // Chrome specifically, because Chrome keeps control names in AXDescription
+  // behind an empty AXTitle, which is the case the label fallback missed.
+  it('hs_ui_inspect labels Chrome controls (#18)', async (ctx) => {
+    const apps = (await runTool('hs_list_apps', { query: 'chrome' })) as unknown as {
+      content: { text: string }[];
+    };
+    const found = JSON.parse(apps.content[0]?.text ?? '[]') as { name: string }[];
+    if (!found.some((app) => app.name === 'Google Chrome')) ctx.skip();
+
+    const result = (await runTool('hs_ui_inspect', {
+      app: 'Google Chrome',
+      role: 'button',
+      depth: 8,
+      limit: 300,
+    })) as unknown as { isError?: boolean; content: { text: string }[] };
+    expect(result.isError).not.toBe(true);
+
+    const text = result.content[0]?.text ?? '{}';
+    const labelled = text.match(/"label": "[^"]+"/g) ?? [];
+    expect(labelled.length).toBeGreaterThan(0);
+  });
+
+  it('hs_settings says whether a key existed (#18)', async () => {
+    const missing = (await runTool('hs_settings', {
+      action: 'get',
+      key: 'never-written-probe',
+    })) as unknown as { content: { text: string }[] };
+    const payload = JSON.parse(missing.content[0]?.text ?? '{}') as { found: boolean };
+    expect(payload.found).toBe(false);
+  });
+
+  it('hs_music_status reports readable playback states (#18)', async () => {
+    const result = (await runTool('hs_music_status', {})) as unknown as {
+      content: { text: string }[];
+    };
+    const payload = JSON.parse(result.content[0]?.text ?? '{}') as Record<
+      string,
+      { running: boolean; state?: string }
+    >;
+    for (const player of Object.values(payload)) {
+      if (player.running && player.state !== undefined) {
+        expect(['playing', 'paused', 'stopped', 'unknown']).toContain(player.state);
+        expect(player.state).not.toMatch(/^kPS/);
+      }
+    }
+  });
+
   it('hs_list_windows returns usable window ids', async () => {
     const result = await bridge.run(lua`
 local out = {}

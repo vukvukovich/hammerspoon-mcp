@@ -34,7 +34,10 @@ return {
     brightness = safe(function() return hs.brightness.get() end),
     screens = safe(function() return #hs.screen.allScreens() end),
   },
+  -- wifiPower is always present, so this encodes as an object even when no
+  -- network is joined; a table holding only nils encoded as a bare [] (#18).
   network = {
+    wifiPower = safe(function() return hs.wifi.interfaceDetails().power end) == true,
     wifiSsid = safe(function() return hs.wifi.currentNetwork() end),
   },
   audio = {
