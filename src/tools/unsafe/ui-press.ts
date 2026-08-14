@@ -51,15 +51,33 @@ for depth, index in ipairs(steps) do
   element = children[index]
 end
 
-local role = element:attributeValue("AXRole") or "?"
--- Matches hs_ui_inspect's fallback order, so the label a caller read there is
--- the label compared here. An empty string is "no label", not a label.
-local function labelled(name)
-  local value = element:attributeValue(name)
-  if type(value) == "string" and value ~= "" then return value end
+-- The label compared against expectLabel MUST be the label hs_ui_inspect
+-- reported, or the guard refuses correct presses forever (#31). The two
+-- functions below are a byte-identical copy of the ones in
+-- src/tools/safe/accessibility.ts; the lua tag forbids sharing them as a
+-- fragment, so a unit test pins the copies to each other instead.
+
+-- An empty string is "no label", not a label: Chrome sets AXTitle to "" on
+-- most controls and keeps the real name in AXDescription, and Lua's truthiness
+-- would stop the fallback chain at the "" (#18).
+local function attr(element, name)
+  local ok, value = pcall(function() return element:attributeValue(name) end)
+  if ok and type(value) == "string" and value ~= "" then return value end
   return nil
 end
-local label = labelled("AXTitle") or labelled("AXDescription") or labelled("AXLabel")
+
+-- A person recognises an element by whatever label it happens to carry, and
+-- different apps populate different attributes, so fall through them in order.
+local function labelOf(element)
+  return attr(element, "AXTitle")
+    or attr(element, "AXDescription")
+    or attr(element, "AXLabel")
+    or attr(element, "AXHelp")
+    or attr(element, "AXPlaceholderValue")
+end
+
+local role = attr(element, "AXRole") or "?"
+local label = labelOf(element)
 
 -- Identity check, and the reason this tool is not merely a path walker (#27).
 -- A path that still resolves is not a path that still means what it meant:
@@ -78,7 +96,8 @@ if ARGS.expectRole ~= nil and role ~= ARGS.expectRole then
     .. ". Pressing reshapes the tree, so re-run hs_ui_inspect for current paths.", 0)
 end
 
-local available = element:actionNames() or {}
+local okActions, available = pcall(function() return element:actionNames() end)
+if not okActions or type(available) ~= "table" then available = {} end
 local wanted = ARGS.action or "AXPress"
 local supported = false
 for _, name in ipairs(available) do
@@ -120,7 +139,10 @@ export const pressUiTool = defineTool({
     expectLabel: z
       .string()
       .min(1)
-      .max(200)
+      // Generous on purpose: hs_ui_inspect returns labels untruncated, and a
+      // cap shorter than what inspect can emit forces the caller into an
+      // unverified press on exactly the elements with descriptive labels (#31).
+      .max(2000)
       .optional()
       .describe(
         'The label hs_ui_inspect reported for this path. The press is refused if the element there no longer carries it. Omit only for elements that have no label.'
