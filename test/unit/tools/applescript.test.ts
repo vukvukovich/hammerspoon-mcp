@@ -6,39 +6,15 @@
  * handling lives here where it can be pinned.
  */
 
-import { describe, expect, it, vi } from 'vitest';
+import { describe, expect, it } from 'vitest';
 
-import type { HammerspoonBridge } from '../../../src/bridge/bridge.js';
 import type { BridgeResult } from '../../../src/bridge/errors.js';
 import { decodeNsStringEscapes } from '../../../src/tools/unsafe/applescript.js';
-import { DocsIndex } from '../../../src/docs/docs-index.js';
-import { ALL_TOOLS } from '../../../src/tools/index.js';
 
-type ToolResult = { content: { type: string; text: string }[]; isError?: boolean };
+import { fakeBridge, handlerFor, stubDocs } from './tool-harness.js';
 
-function fakeBridge(result: BridgeResult<unknown>): HammerspoonBridge {
-  return {
-    hsPath: '/fake/hs',
-    run: vi.fn(async () => Promise.resolve(result)),
-  } as unknown as HammerspoonBridge;
-}
-
-function appleScriptHandler(bridge: HammerspoonBridge) {
-  const tool = ALL_TOOLS.find((candidate) => candidate.name === 'hs_applescript');
-  if (tool === undefined) throw new Error('hs_applescript not registered');
-  let captured: ((args: unknown, ctx: unknown) => Promise<ToolResult>) | undefined;
-  const server = {
-    registerTool: (
-      _name: string,
-      _config: unknown,
-      handler: (args: unknown, ctx: unknown) => Promise<ToolResult>
-    ) => {
-      captured = handler;
-    },
-  };
-  tool.register(server as never, { bridge, docs: new DocsIndex('/nonexistent/docs.json') });
-  if (captured === undefined) throw new Error('handler not captured');
-  return captured;
+function appleScriptHandler(result: BridgeResult<unknown>) {
+  return handlerFor('hs_applescript', { bridge: fakeBridge(result).bridge, docs: stubDocs });
 }
 
 describe('decodeNsStringEscapes', () => {
@@ -81,9 +57,10 @@ describe('decodeNsStringEscapes', () => {
 
 describe('hs_applescript result shaping', () => {
   it('reports a raw-only result with the shared unrepresentable shape (#35)', async () => {
-    const handler = appleScriptHandler(
-      fakeBridge({ ok: true, value: { ok: true, raw: 'date "Friday, 14. August 2026"' } })
-    );
+    const handler = appleScriptHandler({
+      ok: true,
+      value: { ok: true, raw: 'date "Friday, 14. August 2026"' },
+    });
     const result = await handler({ script: 'return current date' }, {});
     expect(result.isError).not.toBe(true);
     const payload = JSON.parse(result.content[0]?.text ?? '{}') as Record<string, unknown>;
@@ -96,35 +73,44 @@ describe('hs_applescript result shaping', () => {
   });
 
   it('reports a genuine result as-is', async () => {
-    const handler = appleScriptHandler(fakeBridge({ ok: true, value: { ok: true, result: 42 } }));
+    const handler = appleScriptHandler({ ok: true, value: { ok: true, result: 42 } });
     const result = await handler({ script: 'return 42' }, {});
     expect(result.isError).not.toBe(true);
     expect(JSON.parse(result.content[0]?.text ?? '{}')).toEqual({ ok: true, result: 42 });
   });
 
   it('decodes NSString escapes in Lua error messages before they reach the caller', async () => {
-    const handler = appleScriptHandler(
-      fakeBridge({
-        ok: false,
-        error: {
-          kind: 'LuaError',
-          message: 'AppleScript failed: Can\\U2019t do \\Ud83d\\Ude00 that (error -1728)',
-          hint: 'irrelevant here',
-        },
-      })
-    );
+    const handler = appleScriptHandler({
+      ok: false,
+      error: {
+        kind: 'LuaError',
+        message: 'AppleScript failed: Can\\U2019t do \\Ud83d\\Ude00 that (error -1728)',
+        hint: 'irrelevant here',
+      },
+    });
     const result = await handler({ script: 'error "x"' }, {});
     expect(result.isError).toBe(true);
     expect(result.content[0]?.text).toContain('Can’t do 😀 that (error -1728)');
   });
 
+  it('leaves non-AppleScript Lua errors undecoded, so their backslashes survive', async () => {
+    // Only the AppleScript failure branch's messages went through NSString
+    // escaping; a LuaSkin error or the program's own guard text never did,
+    // and decoding it would corrupt genuine backslash sequences.
+    const handler = appleScriptHandler({
+      ok: false,
+      error: { kind: 'LuaError', message: 'bad argument: got "\\U0041"', hint: 'irrelevant' },
+    });
+    const result = await handler({ script: 'x' }, {});
+    expect(result.isError).toBe(true);
+    expect(result.content[0]?.text).toContain('\\U0041');
+  });
+
   it('leaves non-Lua bridge failures alone', async () => {
-    const handler = appleScriptHandler(
-      fakeBridge({
-        ok: false,
-        error: { kind: 'Timeout', message: 'Hammerspoon did not respond', hint: 'wait' },
-      })
-    );
+    const handler = appleScriptHandler({
+      ok: false,
+      error: { kind: 'Timeout', message: 'Hammerspoon did not respond', hint: 'wait' },
+    });
     const result = await handler({ script: 'delay 60' }, {});
     expect(result.isError).toBe(true);
     expect(result.content[0]?.text).toContain('Timeout');

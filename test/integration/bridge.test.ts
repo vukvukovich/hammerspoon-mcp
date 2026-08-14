@@ -656,13 +656,30 @@ return true
 
     try {
       await bridge.run(lua`hs.application.launchOrFocus("Calculator") return true`);
-      // Poll for the keypad instead of a fixed sleep: a warm launch is ready
+      // Poll for readiness instead of a fixed sleep: a warm launch is ready
       // well under a second, and no fixed number is long enough for a loaded
-      // cold start (#33).
-      let buttons = new Map<string, InspectNode>();
-      for (let attempt = 0; attempt < 40 && !buttons.has('7'); attempt += 1) {
+      // cold start (#33). The poll itself is a one-line probe - a full
+      // depth-8 inspect per 200ms tick would be dozens of tree dumps just to
+      // ask "is the keypad up yet".
+      const READY_LUA = lua`
+local app = hs.application.get("Calculator")
+if not app then return false end
+local el = hs.axuielement.applicationElement(app)
+if not el then return false end
+local ok, kids = pcall(function() return el:attributeValue("AXChildren") end)
+return ok and type(kids) == "table" and #kids > 0
+`;
+      for (let attempt = 0; attempt < 40; attempt += 1) {
+        const ready = await bridge.run(READY_LUA);
+        if (ready.ok && ready.value === true) break;
         await new Promise((resolve) => setTimeout(resolve, 200));
+      }
+      // The tree can answer before the keypad populates, so the full inspect
+      // still retries a few times - just not as the readiness poll.
+      let buttons = new Map<string, InspectNode>();
+      for (let attempt = 0; attempt < 5 && !buttons.has('7'); attempt += 1) {
         buttons = await buttonsByLabel();
+        if (!buttons.has('7')) await new Promise((resolve) => setTimeout(resolve, 300));
       }
       // Some Calculator versions label their keys differently; a skip shows
       // in the report, where a silent early return would count as a pass and
@@ -836,7 +853,7 @@ return true
     expect(result.isError, result.content[0]?.text ?? '').not.toBe(true);
     const payload = payloadOf<{ encodable?: boolean; value?: string }>(result);
     expect(payload.encodable).toBe(false);
-    expect(payload.value).toContain('tostring');
+    expect(payload.value).toContain('JSON-safe');
   });
 
   it('hs_eval compiles supplied code with load instead of splicing it', async () => {

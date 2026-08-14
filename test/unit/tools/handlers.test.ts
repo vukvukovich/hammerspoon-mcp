@@ -12,48 +12,9 @@ import type { HammerspoonBridge } from '../../../src/bridge/bridge.js';
 import type { BridgeResult } from '../../../src/bridge/errors.js';
 import { DocsIndex } from '../../../src/docs/docs-index.js';
 import { ALL_TOOLS } from '../../../src/tools/index.js';
-import type { ToolContext } from '../../../src/tools/registry.js';
 
-type CapturedCall = { lua: string; args: unknown; options: unknown };
-type ToolResult = { content: { type: string; text: string }[]; isError?: boolean };
+import { fakeBridge, handlerFor, stubDocs } from './tool-harness.js';
 
-function fakeBridge(result: BridgeResult<unknown>): {
-  bridge: HammerspoonBridge;
-  calls: CapturedCall[];
-} {
-  const calls: CapturedCall[] = [];
-  const bridge = {
-    hsPath: '/fake/hs',
-    run: vi.fn(async (lua: string, args?: unknown, options?: unknown) => {
-      calls.push({ lua, args, options });
-      return Promise.resolve(result);
-    }),
-  };
-  return { bridge: bridge as unknown as HammerspoonBridge, calls };
-}
-
-/** Pulls the handler back out of a tool by registering it against a stub server. */
-function handlerFor(name: string, context: ToolContext) {
-  const tool = ALL_TOOLS.find((candidate) => candidate.name === name);
-  if (tool === undefined) throw new Error(`no tool named ${name}`);
-
-  let captured: ((args: unknown, ctx: unknown) => Promise<ToolResult>) | undefined;
-  const server = {
-    registerTool: (
-      _name: string,
-      _config: unknown,
-      handler: (args: unknown, ctx: unknown) => Promise<ToolResult>
-    ) => {
-      captured = handler;
-    },
-  };
-  tool.register(server as never, context);
-
-  if (captured === undefined) throw new Error(`${name} did not register a handler`);
-  return captured;
-}
-
-const stubDocs = new DocsIndex('/nonexistent/docs.json');
 const SUCCESS: BridgeResult<unknown> = { ok: true, value: { fine: true } };
 
 /** The zod schema a tool advertises, captured off a stub registration. */

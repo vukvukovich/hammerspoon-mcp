@@ -1,10 +1,8 @@
 import { z } from 'zod';
 
 import { lua } from '../../bridge/lua.js';
-import { luaError, formatBridgeError } from '../../bridge/errors.js';
 import {
   defineTool,
-  errorResult,
   fromBridge,
   jsonResult,
   unrepresentableResult,
@@ -185,11 +183,13 @@ const NO_RAW_HINT =
 function renderAppleScriptResult(value: unknown): CallToolResult {
   const record = value as { raw?: unknown; rawUnavailable?: unknown } | null;
   if (record !== null && typeof record === 'object') {
+    // { ok: true } rides along because this tool's plain successes carry ok,
+    // and it must not vanish on exactly the degraded payloads (#35).
     if (typeof record.raw === 'string') {
-      return unrepresentableResult(record.raw, RAW_RESULT_HINT);
+      return unrepresentableResult(record.raw, RAW_RESULT_HINT, { ok: true });
     }
     if (record.rawUnavailable === true) {
-      return unrepresentableResult(null, NO_RAW_HINT);
+      return unrepresentableResult(null, NO_RAW_HINT, { ok: true });
     }
   }
   return jsonResult(value);
@@ -200,8 +200,23 @@ async function runAppleScript(
   { bridge }: ToolContext
 ): Promise<CallToolResult> {
   const result = await bridge.run(APPLESCRIPT_LUA, args, { timeoutMs: 30_000 });
-  if (!result.ok && result.error.kind === 'LuaError') {
-    return errorResult(formatBridgeError(luaError(decodeNsStringEscapes(result.error.message))));
+  // Decode NSString escapes only in messages the AppleScript failure branch
+  // built (recognisable by its prefix): other Lua errors never went through
+  // NSString escaping, and decoding them would corrupt genuine backslashes.
+  // The rewritten error keeps its kind, hint, and detail, and renders through
+  // fromBridge like every other tool's failure.
+  if (
+    !result.ok &&
+    result.error.kind === 'LuaError' &&
+    result.error.message.startsWith('AppleScript failed')
+  ) {
+    return fromBridge(
+      {
+        ok: false,
+        error: { ...result.error, message: decodeNsStringEscapes(result.error.message) },
+      },
+      renderAppleScriptResult
+    );
   }
   return fromBridge(result, renderAppleScriptResult);
 }

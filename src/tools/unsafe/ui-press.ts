@@ -55,11 +55,13 @@ if ARGS.expectLabel == nil and ARGS.expectRole == nil then
 end
 local steps = {}
 for step in string.gmatch(ARGS.path, "[^/]+") do
-  local index = tonumber(step)
-  if index == nil then
+  -- Digits only: tonumber alone also accepts hex, exponent, and whitespace
+  -- forms ("0x2", "1e2", " 2 "), which would walk children the path text
+  -- does not literally name.
+  if not string.match(step, "^%d+$") then
     error("path segment '" .. step .. "' is not a child index. Paths look like \\"/1/3/2\\".", 0)
   end
-  steps[#steps + 1] = index
+  steps[#steps + 1] = tonumber(step)
 end
 if #steps == 0 then error("path '" .. tostring(ARGS.path) .. "' selects no element", 0) end
 
@@ -137,8 +139,14 @@ for _, name in ipairs(available) do
   if name == wanted then supported = true break end
 end
 if not supported then
-  error("the element at " .. ARGS.path .. " (" .. role .. ") does not support "
-    .. wanted .. ". It supports: " .. (#available > 0 and table.concat(available, ", ") or "nothing"), 0)
+  -- An empty action list has two readings and the message must not pick the
+  -- wrong one: actionsOf's pcall also swallows the raise of an element that
+  -- died since the walk, and "supports: nothing" would steer the caller
+  -- toward trying other action names when the honest advice is to re-inspect.
+  error("the element at " .. ARGS.path .. " (" .. role .. ") does not support " .. wanted .. ". "
+    .. (#available > 0
+      and ("It supports: " .. table.concat(available, ", "))
+      or "It reports no actions at all - it may also have gone stale since inspection, so re-run hs_ui_inspect."), 0)
 end
 
 -- performAction reports failure two ways and both must be checked: a raise
@@ -168,7 +176,14 @@ return {
   -- sibling in a keypad or toolbar also is (#36). Each arm is derived from
   -- its own expectation being present - never from the other's absence - and
   -- the guard above makes an unchecked press unreachable.
-  verified = (ARGS.expectLabel ~= nil and "label") or (ARGS.expectRole ~= nil and "role") or nil,
+  -- expectRole "?" is the exception that must not claim "role": "?" is what
+  -- attr() reports when the role read fails, so "?" == "?" also matches any
+  -- dead or unreadable element - a comparison that identifies nothing. The
+  -- press is still allowed (a "?"-role element has no stronger expectation
+  -- to offer), but verified = false says honestly that nothing was proven.
+  verified = (ARGS.expectLabel ~= nil and "label")
+    or (ARGS.expectRole ~= nil and ARGS.expectRole ~= "?" and "role")
+    or false,
 }
 `;
 
@@ -177,7 +192,7 @@ export const pressUiTool = defineTool({
   tier: 'unsafe',
   title: 'Press a UI element',
   description:
-    'Perform an accessibility action on an element found by hs_ui_inspect, usually pressing a button. This acts with the full authority of the user in any application. At least one of expectLabel or expectRole is required: pressing an element frequently reshapes the tree around it, so paths from an earlier inspection can silently point at a different element, and the expectation is what turns that into a refusal instead of a wrong click. Pass expectLabel (the label hs_ui_inspect reported) whenever the element has one; expectRole alone only proves the element is the same kind, not the same element. The result\'s verified field says which check ran: "label" (identity) or "role" (kind only - the label field alongside it was read but never compared). Re-run hs_ui_inspect after each press rather than reusing paths from before it.',
+    'Perform an accessibility action on an element found by hs_ui_inspect, usually pressing a button. This acts with the full authority of the user in any application. At least one of expectLabel or expectRole is required: pressing an element frequently reshapes the tree around it, so paths from an earlier inspection can silently point at a different element, and the expectation is what turns that into a refusal instead of a wrong click. Pass expectLabel (the label hs_ui_inspect reported) whenever the element has one; expectRole alone only proves the element is the same kind, not the same element. The result\'s verified field says which check ran: "label" (identity), "role" (kind only - the label field alongside it was read but never compared), or false when the only expectation was the unreadable role "?", which cannot identify an element. Re-run hs_ui_inspect after each press rather than reusing paths from before it.',
   inputSchema: z
     .object({
       path: z

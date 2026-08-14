@@ -99,13 +99,18 @@ export function jsonResult(value: unknown): CallToolResult {
  * in `value`, and a hint saying what to do about it. Only the hint varies,
  * because what to do depends on where the value failed to cross.
  *
- * `ok: true` rides along because this IS a success - the call worked, only
- * the value did not survive - and tools whose plain successes carry an ok
- * field must not have it vanish on exactly the payload that most needs to
- * say "this is not an error".
+ * The shape stays minimal on purpose. A tool whose plain successes carry an
+ * ok field passes `{ ok: true }` as extra so the field does not vanish on
+ * exactly the payload that most needs to say "this is not an error"
+ * (hs_applescript); a tool whose plain successes are bare values adds
+ * nothing, so ok never appears only on its degraded outcomes (hs_eval).
  */
-export function unrepresentableResult(value: unknown, hint: string): CallToolResult {
-  return jsonResult({ ok: true, value, encodable: false, hint });
+export function unrepresentableResult(
+  value: unknown,
+  hint: string,
+  extra: Record<string, unknown> = {}
+): CallToolResult {
+  return jsonResult({ ...extra, value, encodable: false, hint });
 }
 
 /** The hint for values Lua itself could not encode, used by fromBridge. */
