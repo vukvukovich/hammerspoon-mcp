@@ -720,6 +720,28 @@ return true
     }
   }, 30_000);
 
+  // #30: pins the documented truncation, so a future change to the codec's
+  // wrapper that silently altered it would fail here rather than in the wild.
+  it('hs_eval returns only the first value, as documented (#30)', async () => {
+    const several = (await runTool('hs_eval', {
+      code: 'return 1, 2, 3',
+      timeoutMs: 5000,
+    })) as unknown as { isError?: boolean; content: { text: string }[] };
+    expect(several.isError).not.toBe(true);
+    expect(JSON.parse(several.content[0]?.text ?? 'null')).toBe(1);
+
+    // And the workaround the description prescribes returns everything.
+    const wrapped = (await runTool('hs_eval', {
+      code: 'return { first = 1, second = 2, third = 3 }',
+      timeoutMs: 5000,
+    })) as unknown as { content: { text: string }[] };
+    expect(JSON.parse(wrapped.content[0]?.text ?? '{}')).toEqual({
+      first: 1,
+      second: 2,
+      third: 3,
+    });
+  });
+
   // #28: every failure used to be a bare "AppleScript failed", because the
   // error dictionary is the THIRD return value and the code read the second.
   it('hs_applescript reports the real error message and number (#28)', async () => {

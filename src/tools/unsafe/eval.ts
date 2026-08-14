@@ -14,6 +14,12 @@ import { lua } from '../../bridge/lua.js';
  *
  * The security boundary is the tier, not the encoding. Anything Hammerspoon
  * can do, this tool can do.
+ *
+ * Only the first returned value survives (#30). `pcall` hands back every
+ * value, but the codec's wrapper binds one, and packing them into an array
+ * instead would make the result shape depend on how many values a body
+ * happened to return, which is worse than a documented truncation. The
+ * description tells callers to wrap several values in a table.
  */
 const EVAL_LUA = lua`
 local chunk, compileError = load(ARGS.code, "hs_eval", "t")
@@ -29,7 +35,7 @@ export const evalTool = defineTool({
   tier: 'unsafe',
   title: 'Evaluate Lua in Hammerspoon',
   description:
-    'Run arbitrary Lua inside the running Hammerspoon instance and return the result. Use `return` to produce a value. This has full access to the machine, so prefer a specific tool when one exists.',
+    'Run arbitrary Lua inside the running Hammerspoon instance and return the result. Use `return` to produce a value. Only the FIRST returned value comes back, so wrap several in a table: `local ok, err = pcall(f) return { ok = ok, err = err }`. A value with no JSON form (a cyclic table, a table mixing array and named keys, a function, a userdata handle) comes back as its tostring form with encodable=false, so return the specific fields you need instead. This has full access to the machine, so prefer a specific tool when one exists.',
   inputSchema: z.object({
     code: z
       .string()
