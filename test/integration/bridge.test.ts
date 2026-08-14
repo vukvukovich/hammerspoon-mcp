@@ -621,6 +621,105 @@ return true
     }
   });
 
+  /**
+   * Regression test for #27, the wrong-element press.
+   *
+   * Calculator is the target because every button is consequence-free, and
+   * because it reproduces the failure exactly: it inserts a Delete button
+   * into its keypad row as soon as the display has input, shifting every
+   * later sibling index by one. So a path captured before a press points at
+   * a different button after it, which is precisely the situation
+   * expectLabel exists to catch. The app is launched, driven, and quit here.
+   */
+  it('hs_ui_press refuses a path whose element changed under it (#27)', async () => {
+    const keypadChildren = lua`
+local app = hs.application.get("Calculator")
+if not app then error("Calculator is not running", 0) end
+local node = hs.axuielement.applicationElement(app)
+for _, index in ipairs({ 1, 1, 1, 1, 1 }) do
+  local children = node:attributeValue("AXChildren")
+  if type(children) ~= "table" or not children[index] then error("keypad not found", 0) end
+  node = children[index]
+end
+local out = {}
+for index, child in ipairs(node:attributeValue("AXChildren") or {}) do
+  out[#out + 1] = {
+    index = index,
+    label = child:attributeValue("AXTitle") or child:attributeValue("AXDescription") or "",
+  }
+end
+return out
+`;
+
+    await bridge.run(lua`hs.application.launchOrFocus("Calculator") return true`);
+    await new Promise((resolve) => setTimeout(resolve, 2500));
+
+    try {
+      const before = await bridge.run(keypadChildren);
+      expect(before.ok).toBe(true);
+      if (!before.ok) return;
+
+      const keys = before.value as { index: number; label: string }[];
+      const five = keys.find((key) => key.label === '5');
+      const seven = keys.find((key) => key.label === '7');
+      // Some Calculator versions expose a different tree; skip rather than
+      // assert on a layout this machine does not have.
+      if (!five || !seven) return;
+
+      const pathTo = (index: number): string => `/1/1/1/1/1/${String(index)}`;
+
+      // A matching expectation acts normally.
+      const pressed = (await runTool('hs_ui_press', {
+        path: pathTo(seven.index),
+        app: 'Calculator',
+        expectLabel: '7',
+      })) as unknown as { isError?: boolean; content: { text: string }[] };
+      expect(pressed.isError).not.toBe(true);
+      expect(JSON.parse(pressed.content[0]?.text ?? '{}')).toMatchObject({
+        label: '7',
+        verified: true,
+      });
+
+      // The guard itself, asserted deterministically: aiming 5's expectation
+      // at 7's path is exactly the state a stale path produces. The real
+      // shift is not reproducible on demand (it needs a pending operation on
+      // the display, so a fresh launch often will not do it), and a
+      // regression test must not depend on Calculator's mood.
+      const mismatched = (await runTool('hs_ui_press', {
+        path: pathTo(seven.index),
+        app: 'Calculator',
+        expectLabel: '5',
+      })) as unknown as { isError?: boolean; content: { text: string }[] };
+      expect(mismatched.isError).toBe(true);
+      expect(mismatched.content[0]?.text).toContain('refusing to act');
+      expect(mismatched.content[0]?.text).toContain("found '7'");
+
+      // Role mismatches are refused the same way, for unlabelled elements.
+      const wrongRole = (await runTool('hs_ui_press', {
+        path: pathTo(five.index),
+        app: 'Calculator',
+        expectRole: 'AXTextField',
+      })) as unknown as { isError?: boolean; content: { text: string }[] };
+      expect(wrongRole.isError).toBe(true);
+      expect(wrongRole.content[0]?.text).toContain('refusing to act');
+
+      // An unverified press still works, but says so, so a caller can tell a
+      // checked press from an unchecked one.
+      const unverified = (await runTool('hs_ui_press', {
+        path: pathTo(five.index),
+        app: 'Calculator',
+      })) as unknown as { isError?: boolean; content: { text: string }[] };
+      expect(unverified.isError).not.toBe(true);
+      expect(JSON.parse(unverified.content[0]?.text ?? '{}')).toMatchObject({ verified: false });
+    } finally {
+      await bridge.run(lua`
+local app = hs.application.get("Calculator")
+if app then app:kill() end
+return true
+`);
+    }
+  }, 30_000);
+
   it('hs_eval compiles supplied code with load instead of splicing it', async () => {
     const tool = ALL_TOOLS.find((candidate) => candidate.name === 'hs_eval');
     expect(tool?.tier).toBe('unsafe');

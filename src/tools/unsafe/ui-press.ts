@@ -52,7 +52,31 @@ for depth, index in ipairs(steps) do
 end
 
 local role = element:attributeValue("AXRole") or "?"
-local label = element:attributeValue("AXTitle") or element:attributeValue("AXDescription")
+-- Matches hs_ui_inspect's fallback order, so the label a caller read there is
+-- the label compared here. An empty string is "no label", not a label.
+local function labelled(name)
+  local value = element:attributeValue(name)
+  if type(value) == "string" and value ~= "" then return value end
+  return nil
+end
+local label = labelled("AXTitle") or labelled("AXDescription") or labelled("AXLabel")
+
+-- Identity check, and the reason this tool is not merely a path walker (#27).
+-- A path that still resolves is not a path that still means what it meant:
+-- pressing an element frequently reshapes the tree around it (Calculator
+-- inserts a Delete button once its display has input, shifting every later
+-- sibling by one), so the second press planned from one inspection lands on
+-- the wrong element. Validity is not identity, so compare before acting.
+if ARGS.expectLabel ~= nil and label ~= ARGS.expectLabel then
+  error("refusing to act: expected the element at " .. ARGS.path .. " to be labelled '"
+    .. tostring(ARGS.expectLabel) .. "', found " .. (label and ("'" .. label .. "'") or "no label")
+    .. ". Pressing reshapes the tree, so re-run hs_ui_inspect for current paths.", 0)
+end
+if ARGS.expectRole ~= nil and role ~= ARGS.expectRole then
+  error("refusing to act: expected the element at " .. ARGS.path .. " to be a "
+    .. tostring(ARGS.expectRole) .. ", found " .. role
+    .. ". Pressing reshapes the tree, so re-run hs_ui_inspect for current paths.", 0)
+end
 
 local available = element:actionNames() or {}
 local wanted = ARGS.action or "AXPress"
@@ -68,7 +92,16 @@ end
 local ok, err = pcall(function() return element:performAction(wanted) end)
 if not ok then error("performing " .. wanted .. " failed: " .. tostring(err), 0) end
 
-return { app = app:name(), path = ARGS.path, role = role, label = label, action = wanted }
+return {
+  app = app:name(),
+  path = ARGS.path,
+  role = role,
+  label = label,
+  action = wanted,
+  -- False means nothing was checked against the caller's expectation, so the
+  -- element pressed is whatever the path happened to resolve to just now.
+  verified = ARGS.expectLabel ~= nil or ARGS.expectRole ~= nil,
+}
 `;
 
 export const pressUiTool = defineTool({
@@ -76,7 +109,7 @@ export const pressUiTool = defineTool({
   tier: 'unsafe',
   title: 'Press a UI element',
   description:
-    'Perform an accessibility action on an element found by hs_ui_inspect, usually pressing a button. This acts with the full authority of the user in any application, so confirm the element is the intended one before calling. The path comes from hs_ui_inspect and is re-walked each time, so a path that no longer resolves fails rather than pressing something else.',
+    'Perform an accessibility action on an element found by hs_ui_inspect, usually pressing a button. This acts with the full authority of the user in any application. ALWAYS pass expectLabel (the label hs_ui_inspect reported for that path): pressing an element frequently reshapes the tree around it, so paths from an earlier inspection can silently point at a different element, and expectLabel is what turns that into a refusal instead of a wrong click. Re-run hs_ui_inspect after each press rather than reusing paths from before it.',
   inputSchema: z.object({
     path: z
       .string()
@@ -84,6 +117,22 @@ export const pressUiTool = defineTool({
       .max(200)
       .regex(/^[0-9/]+$/, 'A path is a slash-separated list of child indexes, such as /1/3/2.')
       .describe('Element path from hs_ui_inspect, for example "/1/3/2".'),
+    expectLabel: z
+      .string()
+      .min(1)
+      .max(200)
+      .optional()
+      .describe(
+        'The label hs_ui_inspect reported for this path. The press is refused if the element there no longer carries it. Omit only for elements that have no label.'
+      ),
+    expectRole: z
+      .string()
+      .min(2)
+      .max(40)
+      .optional()
+      .describe(
+        'The role hs_ui_inspect reported, for example "AXButton". Use this when the element has no label. The press is refused on a mismatch.'
+      ),
     app: z
       .string()
       .min(1)
