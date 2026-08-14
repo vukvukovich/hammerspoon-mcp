@@ -120,10 +120,15 @@ export function buildProgram(luaBody: string, encodedArgs: string, marker: strin
     // anything, and a __tostring metamethod can throw (#34). Unprotected, that
     // raised at chunk top level, printed no marker line, and surfaced as a
     // ProtocolError instead of the report this fallback exists to produce.
+    // The result must also be ENCODABLE, not merely a string: a __tostring
+    // returning invalid UTF-8 passes the type check, then kills the fallback
+    // encode and collapses a success into "result could not be encoded".
     'local function __stringify(value, fallback)',
     '  local ok, text = pcall(tostring, value)',
-    '  if ok and type(text) == "string" then return text end',
-    '  return fallback',
+    '  if not ok or type(text) ~= "string" then return fallback end',
+    '  local fine, probe = pcall(hs.json.encode, { p = text })',
+    '  if not fine or probe == nil then return fallback end',
+    '  return text',
     'end',
     'local __payload',
     'if __ok then',

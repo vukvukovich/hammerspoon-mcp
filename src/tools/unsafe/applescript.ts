@@ -126,7 +126,9 @@ if result ~= nil then
   return { ok = true, rawUnavailable = true }
 end
 
-return { ok = true, result = result }
+-- Reachable only when result is nil (every result ~= nil path above
+-- returns), so this is a null success and says exactly that.
+return { ok = true }
 `;
 
 /**

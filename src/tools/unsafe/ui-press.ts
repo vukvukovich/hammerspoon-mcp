@@ -39,12 +39,28 @@ end
 -- it again rather than holding a handle keeps this stateless, and it means a
 -- stale path fails loudly instead of acting on the wrong element.
 -- Typed check before gmatch: a schema-bypassing caller can hand path any
--- type, and "bad argument #1 to 'gmatch'" diagnoses nothing.
+-- type, and "bad argument #1 to 'gmatch'" diagnoses nothing. The same class
+-- of caller can hand a malformed segment, and tonumber's nil must not be
+-- silently dropped - '1/x/2' collapsing to /1/2 walks to a wrong element.
 if type(ARGS.path) ~= "string" then
   error("path must be a string of child indexes from hs_ui_inspect, such as \\"/1/3/2\\"", 0)
 end
+-- The schema demands an expectation before any press; repeated here because
+-- this program must not trust its caller (#36), and checked before the walk
+-- because it depends only on the arguments - a stale path must not mask it.
+if ARGS.expectLabel == nil and ARGS.expectRole == nil then
+  error("refusing to act: pass expectLabel (the label hs_ui_inspect reported for this path)"
+    .. " or, for unlabelled elements, expectRole. Without one, a press lands on whatever the"
+    .. " path resolves to now, which is not necessarily the element that was inspected.", 0)
+end
 local steps = {}
-for step in string.gmatch(ARGS.path, "[^/]+") do steps[#steps + 1] = tonumber(step) end
+for step in string.gmatch(ARGS.path, "[^/]+") do
+  local index = tonumber(step)
+  if index == nil then
+    error("path segment '" .. step .. "' is not a child index. Paths look like \\"/1/3/2\\".", 0)
+  end
+  steps[#steps + 1] = index
+end
 if #steps == 0 then error("path '" .. tostring(ARGS.path) .. "' selects no element", 0) end
 
 -- pcall because this walk runs on caller-supplied paths into a tree that may
@@ -93,14 +109,8 @@ local label = labelOf(element)
 -- inserts a Delete button once its display has input, shifting every later
 -- sibling by one), so the second press planned from one inspection lands on
 -- the wrong element. Validity is not identity, so compare before acting.
--- The schema requires an expectation, but this program must not trust its
--- caller either: a direct bridge.run with neither would otherwise press
--- unchecked and still claim a verification level below (#36).
-if ARGS.expectLabel == nil and ARGS.expectRole == nil then
-  error("refusing to act: pass expectLabel (the label hs_ui_inspect reported for this path)"
-    .. " or, for unlabelled elements, expectRole. Without one, a press lands on whatever the"
-    .. " path resolves to now, which is not necessarily the element that was inspected.", 0)
-end
+-- The no-expectation refusal itself lives at the top of this program, before
+-- the walk, because it depends only on the arguments (#36).
 local function refuse(expected, found)
   error("refusing to act: expected the element at " .. ARGS.path .. " to be " .. expected
     .. ", found " .. found
@@ -134,12 +144,17 @@ end
 -- performAction reports failure two ways and both must be checked: a raise
 -- (caught by pcall), and a false/nil FIRST RETURN with the reason second.
 -- Ignoring the return value reported failed presses as verified successes.
+-- The docs are explicit that false/nil only SUGGESTS failure (an action that
+-- opened a blocking prompt can time out after delivering), so the message
+-- must not claim certainty either way - a categorical "did not happen"
+-- invites a destructive double press.
 local okPress, outcome, pressErr = pcall(function() return element:performAction(wanted) end)
 if not okPress then error("performing " .. wanted .. " failed: " .. tostring(outcome), 0) end
 if outcome == false or outcome == nil then
-  error("performing " .. wanted .. " failed"
-    .. (pressErr ~= nil and (": " .. tostring(pressErr)) or ": the element did not accept the action")
-    .. ". The press did NOT happen.", 0)
+  error("performing " .. wanted .. " did not report success"
+    .. (pressErr ~= nil and (": " .. tostring(pressErr)) or "")
+    .. ". The press may or may not have been delivered - re-run hs_ui_inspect and check the"
+    .. " UI state before retrying, especially for actions that are destructive when repeated.", 0)
 end
 
 return {
@@ -186,7 +201,10 @@ export const pressUiTool = defineTool({
         ),
       expectRole: z
         .string()
-        .min(2)
+        // min(1), not min(2): hs_ui_inspect reports an unreadable role as
+        // "?", and an unlabelled element with role "?" must still be
+        // pressable with its expectation round-tripped.
+        .min(1)
         .max(40)
         .optional()
         .describe(

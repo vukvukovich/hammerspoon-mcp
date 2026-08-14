@@ -7,24 +7,11 @@
  * remembering the rule.
  */
 
-import { readdir, readFile } from 'node:fs/promises';
-import { join } from 'node:path';
+import { readFile } from 'node:fs/promises';
 
 import { describe, expect, it } from 'vitest';
 
-const SRC_ROOT = new URL('../../../src/', import.meta.url).pathname;
-
-async function collectTypeScriptFiles(directory: string): Promise<string[]> {
-  const entries = await readdir(directory, { withFileTypes: true });
-  const files = await Promise.all(
-    entries.map(async (entry) => {
-      const full = join(directory, entry.name);
-      if (entry.isDirectory()) return collectTypeScriptFiles(full);
-      return entry.name.endsWith('.ts') ? [full] : [];
-    })
-  );
-  return files.flat();
-}
+import { SRC_ROOT, collectTypeScriptFiles } from './src-walker.js';
 
 /**
  * Matches `const NAME_LUA = lua\`...\`;` and captures the template body. The

@@ -195,10 +195,10 @@ describe.skipIf(!available)('tool Lua executes against real Hammerspoon', () => 
     });
 
     expect(result.isError).not.toBe(true);
-    const payload = JSON.parse(result.content[0]?.text ?? '{}') as {
+    const payload = payloadOf<{
       app: string;
       tree?: { role?: string };
-    };
+    }>(result);
     expect(payload.app).toBe('Hammerspoon');
     expect(payload.tree?.role).toBe('AXApplication');
     // Structure only: text field contents must never be reported.
@@ -255,9 +255,9 @@ describe.skipIf(!available)('tool Lua executes against real Hammerspoon', () => 
     const safeName = process.env['HS_MCP_TEST_SHORTCUT'] ?? 'Open Finder file manager';
 
     const listed = await runTool('hs_list_shortcuts', {});
-    const parsed = JSON.parse(listed.content[0]?.text ?? '{}') as {
+    const parsed = payloadOf<{
       shortcuts?: { name: string }[];
-    };
+    }>(listed);
     const names = (parsed.shortcuts ?? []).map((entry) => entry.name);
     if (!names.includes(safeName)) ctx.skip();
 
@@ -311,10 +311,10 @@ return { id = w:id(), frame = { x = f.x, y = f.y, w = f.w, h = f.h } }
       });
       expect(result.isError).not.toBe(true);
 
-      const payload = JSON.parse(result.content[0]?.text ?? '{}') as {
+      const payload = payloadOf<{
         frame: { x: number; y: number };
         adjusted: boolean;
-      };
+      }>(result);
 
       const observed = await bridge.run(READ_FRAME_PROBE_LUA, { id: original.id });
       expect(observed.ok).toBe(true);
@@ -363,7 +363,7 @@ return true
       rate: 400,
     });
     expect(result.isError).not.toBe(true);
-    const payload = JSON.parse(result.content[0]?.text ?? '{}') as { voice: string };
+    const payload = payloadOf<{ voice: string }>(result);
     expect(payload.voice.toLowerCase()).toContain('daniel');
     // The identifier, not the short name: constructing with a short name is
     // the silent default-voice fallback (#22).
@@ -386,11 +386,11 @@ return true
       withdrawAfter: 5,
     });
     expect(result.isError).not.toBe(true);
-    const payload = JSON.parse(result.content[0]?.text ?? '{}') as {
+    const payload = payloadOf<{
       posted: boolean;
       deliveryVerified: boolean;
       sent?: boolean;
-    };
+    }>(result);
     expect(payload.posted).toBe(true);
     expect(payload.deliveryVerified).toBe(false);
     expect(payload.sent).toBeUndefined();
@@ -416,7 +416,7 @@ return true
     try {
       const result = await runTool('hs_goto_space', { id: other.id });
       expect(result.isError).not.toBe(true);
-      const payload = JSON.parse(result.content[0]?.text ?? '{}') as { arrived: boolean };
+      const payload = payloadOf<{ arrived: boolean }>(result);
       expect(payload.arrived).toBe(true);
 
       const observed = await bridge.run(lua`return { focused = hs.spaces.focusedSpace() }`);
@@ -448,9 +448,9 @@ return true
 
   it('hs_list_voices distinguishes same-named voices by language and id (#18)', async () => {
     const result = await runTool('hs_list_voices', {});
-    const payload = JSON.parse(result.content[0]?.text ?? '{}') as {
+    const payload = payloadOf<{
       voices: { name: string; id: string; language?: string }[];
-    };
+    }>(result);
     expect(payload.voices.length).toBeGreaterThan(0);
 
     const ids = new Set(payload.voices.map((voice) => voice.id));
@@ -466,12 +466,12 @@ return true
 
   it('hs_wifi never claims a scan the radio could not have run (#18)', async () => {
     const result = await runTool('hs_wifi', {});
-    const payload = JSON.parse(result.content[0]?.text ?? '{}') as {
+    const payload = payloadOf<{
       radio: string;
       scanned: boolean;
       connected: boolean;
       available: string[];
-    };
+    }>(result);
     expect(['on', 'off']).toContain(payload.radio);
     expect(typeof payload.connected).toBe('boolean');
     if (payload.radio === 'off') {
@@ -511,16 +511,13 @@ return true
       action: 'get',
       key: 'never-written-probe',
     });
-    const payload = JSON.parse(missing.content[0]?.text ?? '{}') as { found: boolean };
+    const payload = payloadOf<{ found: boolean }>(missing);
     expect(payload.found).toBe(false);
   });
 
   it('hs_music_status reports readable playback states (#18)', async () => {
     const result = await runTool('hs_music_status', {});
-    const payload = JSON.parse(result.content[0]?.text ?? '{}') as Record<
-      string,
-      { running: boolean; state?: string }
-    >;
+    const payload = payloadOf<Record<string, { running: boolean; state?: string }>>(result);
     for (const player of Object.values(payload)) {
       if (player.running && player.state !== undefined) {
         expect(['playing', 'paused', 'stopped', 'unknown']).toContain(player.state);

@@ -12,12 +12,12 @@
  * each other. Editing either copy alone fails here.
  */
 
-import { readdir, readFile } from 'node:fs/promises';
+import { readFile } from 'node:fs/promises';
 import { join } from 'node:path';
 
 import { describe, expect, it } from 'vitest';
 
-const SRC_ROOT = new URL('../../../src/', import.meta.url).pathname;
+import { SRC_ROOT, collectTypeScriptFiles } from './src-walker.js';
 
 /**
  * The canonical label-resolution fragment. Byte-for-byte what both
@@ -47,18 +47,6 @@ const CANONICAL_ACTIONS = `local function actionsOf(element)
   if ok and type(names) == "table" and #names > 0 then return names end
   return nil
 end`;
-
-async function collectTypeScriptFiles(directory: string): Promise<string[]> {
-  const entries = await readdir(directory, { withFileTypes: true });
-  const files = await Promise.all(
-    entries.map(async (entry) => {
-      const full = join(directory, entry.name);
-      if (entry.isDirectory()) return collectTypeScriptFiles(full);
-      return entry.name.endsWith('.ts') ? [full] : [];
-    })
-  );
-  return files.flat();
-}
 
 describe('the label-resolution fragment', () => {
   it.each([['src/tools/safe/accessibility.ts'], ['src/tools/unsafe/ui-press.ts']])(
