@@ -61,15 +61,22 @@ describe('the label-resolution fragment', () => {
   );
 
   it('is never partially copied anywhere else in src', async () => {
-    // A third divergent copy is how #31 happened. Any file that resolves
-    // labels by AX attribute must carry the full canonical chain, not a
-    // shortened one.
+    // A third divergent copy is how #31 happened. Any file touching any of
+    // the label attributes must carry the full canonical chain - triggering
+    // on AXTitle alone would miss a divergent chain that starts lower down.
+    const TRIGGERS = [
+      '"AXTitle"',
+      '"AXDescription"',
+      '"AXLabel"',
+      '"AXHelp"',
+      '"AXPlaceholderValue"',
+    ];
     const files = await collectTypeScriptFiles(SRC_ROOT);
     const offenders: string[] = [];
 
     for (const file of files) {
       const contents = await readFile(file, 'utf8');
-      if (!contents.includes('"AXTitle"')) continue;
+      if (!TRIGGERS.some((trigger) => contents.includes(trigger))) continue;
       if (!contents.includes(CANONICAL_FRAGMENT) || !contents.includes(CANONICAL_CHAIN)) {
         offenders.push(file);
       }

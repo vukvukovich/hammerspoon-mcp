@@ -87,6 +87,9 @@ describe('hs_applescript result shaping', () => {
     const result = await handler({ script: 'return current date' }, {});
     expect(result.isError).not.toBe(true);
     const payload = JSON.parse(result.content[0]?.text ?? '{}') as Record<string, unknown>;
+    // ok rides along on every success shape this tool emits, so a caller
+    // reading payload.ok is never told a successful call was malformed.
+    expect(payload['ok']).toBe(true);
     expect(payload['encodable']).toBe(false);
     expect(payload['value']).toBe('date "Friday, 14. August 2026"');
     expect(typeof payload['hint']).toBe('string');

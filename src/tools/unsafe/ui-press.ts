@@ -1,7 +1,7 @@
 import { z } from 'zod';
 
 import { lua } from '../../bridge/lua.js';
-import { defineTool, errorResult, fromBridge } from '../registry.js';
+import { defineTool, fromBridge } from '../registry.js';
 
 /**
  * Performing an accessibility action, which means clicking things.
@@ -42,9 +42,12 @@ local steps = {}
 for step in string.gmatch(ARGS.path, "[^/]+") do steps[#steps + 1] = tonumber(step) end
 if #steps == 0 then error("path '" .. tostring(ARGS.path) .. "' selects no element", 0) end
 
+-- pcall because this walk runs on caller-supplied paths into a tree that may
+-- have changed: a dead element's attributeValue raises inside LuaSkin, and a
+-- raise means the same thing a missing child does - the path went stale.
 for depth, index in ipairs(steps) do
-  local children = element:attributeValue("AXChildren")
-  if type(children) ~= "table" or children[index] == nil then
+  local okChildren, children = pcall(function() return element:attributeValue("AXChildren") end)
+  if not okChildren or type(children) ~= "table" or children[index] == nil then
     error("path stops being valid at step " .. tostring(depth) .. " (index " .. tostring(index)
       .. "). The UI changed since it was inspected, so re-run hs_ui_inspect.", 0)
   end
@@ -85,7 +88,14 @@ local label = labelOf(element)
 -- inserts a Delete button once its display has input, shifting every later
 -- sibling by one), so the second press planned from one inspection lands on
 -- the wrong element. Validity is not identity, so compare before acting.
--- The handler guarantees at least one expectation is present (#36).
+-- The schema requires an expectation, but this program must not trust its
+-- caller either: a direct bridge.run with neither would otherwise press
+-- unchecked and still claim a verification level below (#36).
+if ARGS.expectLabel == nil and ARGS.expectRole == nil then
+  error("refusing to act: pass expectLabel (the label hs_ui_inspect reported for this path)"
+    .. " or, for unlabelled elements, expectRole. Without one, a press lands on whatever the"
+    .. " path resolves to now, which is not necessarily the element that was inspected.", 0)
+end
 local function refuse(expected, found)
   error("refusing to act: expected the element at " .. ARGS.path .. " to be " .. expected
     .. ", found " .. found
@@ -122,9 +132,10 @@ return {
   action = wanted,
   -- What the press was checked against. "label" is an identity check;
   -- "role" only proves the element is the same KIND as expected, which every
-  -- sibling in a keypad or toolbar also is (#36). The handler refuses a call
-  -- carrying neither, so an unchecked press does not exist.
-  verified = (ARGS.expectLabel ~= nil) and "label" or "role",
+  -- sibling in a keypad or toolbar also is (#36). Each arm is derived from
+  -- its own expectation being present - never from the other's absence - and
+  -- the guard above makes an unchecked press unreachable.
+  verified = (ARGS.expectLabel ~= nil and "label") or (ARGS.expectRole ~= nil and "role") or nil,
 }
 `;
 
@@ -134,57 +145,55 @@ export const pressUiTool = defineTool({
   title: 'Press a UI element',
   description:
     'Perform an accessibility action on an element found by hs_ui_inspect, usually pressing a button. This acts with the full authority of the user in any application. At least one of expectLabel or expectRole is required: pressing an element frequently reshapes the tree around it, so paths from an earlier inspection can silently point at a different element, and the expectation is what turns that into a refusal instead of a wrong click. Pass expectLabel (the label hs_ui_inspect reported) whenever the element has one; expectRole alone only proves the element is the same kind, not the same element. Re-run hs_ui_inspect after each press rather than reusing paths from before it.',
-  inputSchema: z.object({
-    path: z
-      .string()
-      .min(1)
-      .max(200)
-      .regex(/^[0-9/]+$/, 'A path is a slash-separated list of child indexes, such as /1/3/2.')
-      .describe('Element path from hs_ui_inspect, for example "/1/3/2".'),
-    expectLabel: z
-      .string()
-      .min(1)
-      // Generous on purpose: hs_ui_inspect returns labels untruncated, and a
-      // cap shorter than what inspect can emit forces the caller into an
-      // unverified press on exactly the elements with descriptive labels (#31).
-      .max(2000)
-      .optional()
-      .describe(
-        'The label hs_ui_inspect reported for this path. The press is refused if the element there no longer carries it. Omit only for elements that have no label.'
-      ),
-    expectRole: z
-      .string()
-      .min(2)
-      .max(40)
-      .optional()
-      .describe(
-        'The role hs_ui_inspect reported, for example "AXButton". Use this when the element has no label. The press is refused on a mismatch.'
-      ),
-    app: z
-      .string()
-      .min(1)
-      .max(100)
-      .optional()
-      .describe('Application name. Must match the one the path was inspected in.'),
-    action: z
-      .string()
-      .min(3)
-      .max(40)
-      .default('AXPress')
-      .describe('Accessibility action name. hs_ui_inspect lists what each element supports.'),
-  }),
-  annotations: { destructiveHint: true, openWorldHint: true },
-  handler: async (args, { bridge }) => {
+  inputSchema: z
+    .object({
+      path: z
+        .string()
+        .min(1)
+        .max(200)
+        .regex(/^[0-9/]+$/, 'A path is a slash-separated list of child indexes, such as /1/3/2.')
+        .describe('Element path from hs_ui_inspect, for example "/1/3/2".'),
+      expectLabel: z
+        .string()
+        .min(1)
+        // Generous on purpose: hs_ui_inspect returns labels untruncated, and a
+        // cap shorter than what inspect can emit forces the caller into an
+        // unverified press on exactly the elements with descriptive labels (#31).
+        .max(2000)
+        .optional()
+        .describe(
+          'The label hs_ui_inspect reported for this path. The press is refused if the element there no longer carries it. Omit only for elements that have no label.'
+        ),
+      expectRole: z
+        .string()
+        .min(2)
+        .max(40)
+        .optional()
+        .describe(
+          'The role hs_ui_inspect reported, for example "AXButton". Use this when the element has no label. The press is refused on a mismatch.'
+        ),
+      app: z
+        .string()
+        .min(1)
+        .max(100)
+        .optional()
+        .describe('Application name. Must match the one the path was inspected in.'),
+      action: z
+        .string()
+        .min(3)
+        .max(40)
+        .default('AXPress')
+        .describe('Accessibility action name. hs_ui_inspect lists what each element supports.'),
+    })
     // The identity guard is structural, not advisory (#36): a press that
     // checks nothing lands wherever a shifted path happens to point, so a
-    // call carrying no expectation is refused before it reaches the machine.
-    // This lives here rather than in a zod refine because defineTool's
-    // inputSchema must stay a plain ZodObject.
-    if (args.expectLabel === undefined && args.expectRole === undefined) {
-      return errorResult(
-        'refusing to act: pass expectLabel (the label hs_ui_inspect reported for this path) or, for unlabelled elements, expectRole. Without one, a press lands on whatever the path resolves to now, which is not necessarily the element that was inspected.'
-      );
-    }
-    return fromBridge(await bridge.run(PRESS_LUA, args));
-  },
+    // call carrying no expectation fails validation before it reaches the
+    // machine. Same pattern as hs_settings' cross-field refine. The Lua
+    // program repeats the check for callers that bypass the schema.
+    .refine((input) => input.expectLabel !== undefined || input.expectRole !== undefined, {
+      message:
+        'Pass expectLabel (the label hs_ui_inspect reported for this path) or, for unlabelled elements, expectRole. Without one, a press lands on whatever the path resolves to now, which is not necessarily the element that was inspected.',
+    }),
+  annotations: { destructiveHint: true, openWorldHint: true },
+  handler: async (args, { bridge }) => fromBridge(await bridge.run(PRESS_LUA, args)),
 });

@@ -98,9 +98,14 @@ export function jsonResult(value: unknown): CallToolResult {
  * so a caller learns a single vocabulary: `encodable: false`, the string form
  * in `value`, and a hint saying what to do about it. Only the hint varies,
  * because what to do depends on where the value failed to cross.
+ *
+ * `ok: true` rides along because this IS a success - the call worked, only
+ * the value did not survive - and tools whose plain successes carry an ok
+ * field must not have it vanish on exactly the payload that most needs to
+ * say "this is not an error".
  */
 export function unrepresentableResult(value: unknown, hint: string): CallToolResult {
-  return jsonResult({ value, encodable: false, hint });
+  return jsonResult({ ok: true, value, encodable: false, hint });
 }
 
 /** The hint for values Lua itself could not encode, used by fromBridge. */

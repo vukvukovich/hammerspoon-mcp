@@ -690,14 +690,27 @@ return true
       expect(wrongRole.isError).toBe(true);
       expect(wrongRole.content[0]?.text).toContain('refusing to act');
 
-      // A press carrying no expectation at all is refused by the handler
-      // before any Lua runs (#36).
+      // A press carrying no expectation at all is refused. runTool bypasses
+      // the schema refine exactly like a direct bridge caller would, so the
+      // refusal asserted here is the Lua program's own guard (#36). Ordered
+      // before the acting press below so the path is known-fresh.
       const unchecked = await runTool('hs_ui_press', {
         path: five.path ?? '',
         app: 'Calculator',
       });
       expect(unchecked.isError).toBe(true);
       expect(unchecked.content[0]?.text).toContain('expectLabel');
+
+      // A matching role acts, and reports the weaker verification level -
+      // the "role" arm must be pinned as its own value, not inferred from
+      // the absence of a label (#36). Last, because it presses.
+      const rolePressed = await runTool('hs_ui_press', {
+        path: five.path ?? '',
+        app: 'Calculator',
+        expectRole: 'AXButton',
+      });
+      expect(rolePressed.isError, rolePressed.content[0]?.text ?? '').not.toBe(true);
+      expect(payloadOf(rolePressed)).toMatchObject({ label: '5', verified: 'role' });
     } finally {
       // Kill only what this test launched: the wasRunning skip above means
       // reaching here implies the instance is ours.

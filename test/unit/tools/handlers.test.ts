@@ -158,16 +158,34 @@ describe('every tool', () => {
 });
 
 describe('hs_ui_press expectation guard (#36)', () => {
-  it('refuses a press carrying neither expectLabel nor expectRole, without bridging', async () => {
-    const { bridge, calls } = fakeBridge(SUCCESS);
-    const result = await handlerFor('hs_ui_press', { bridge, docs: stubDocs })(
-      { path: '/1/2', app: 'Calculator' },
-      {}
-    );
-    expect(result.isError).toBe(true);
-    expect(result.content[0]?.text).toContain('expectLabel');
-    // Refused before any Lua ran: an unchecked press must not reach the machine.
-    expect(calls.length).toBe(0);
+  /** The schema a tool advertises, captured off the stub registration. */
+  function schemaFor(name: string): { safeParse: (value: unknown) => { success: boolean } } {
+    const tool = ALL_TOOLS.find((candidate) => candidate.name === name);
+    if (tool === undefined) throw new Error(`no tool named ${name}`);
+    let captured: { safeParse: (value: unknown) => { success: boolean } } | undefined;
+    const server = {
+      registerTool: (
+        _name: string,
+        config: { inputSchema: { safeParse: (value: unknown) => { success: boolean } } },
+        _handler: unknown
+      ) => {
+        captured = config.inputSchema;
+      },
+    };
+    tool.register(server as never, { bridge: fakeBridge(SUCCESS).bridge, docs: stubDocs });
+    if (captured === undefined) throw new Error(`${name} did not register a schema`);
+    return captured;
+  }
+
+  it('rejects a press carrying neither expectLabel nor expectRole at the schema', () => {
+    // The refine fails validation before the handler runs, so an unchecked
+    // press never reaches the machine. The Lua program repeats the check for
+    // callers that bypass the schema; the integration suite exercises that
+    // arm, since a fake bridge cannot run Lua.
+    const schema = schemaFor('hs_ui_press');
+    expect(schema.safeParse({ path: '/1/2', app: 'Calculator' }).success).toBe(false);
+    expect(schema.safeParse({ path: '/1/2', expectLabel: '7' }).success).toBe(true);
+    expect(schema.safeParse({ path: '/1/2', expectRole: 'AXButton' }).success).toBe(true);
   });
 
   it('bridges a press that carries an expectation', async () => {

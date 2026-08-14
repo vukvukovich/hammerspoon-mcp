@@ -62,10 +62,11 @@ if not ok then
         message = message .. " (error " .. tostring(descriptor.OSAScriptErrorNumberKey) .. ")"
       end
     else
-      -- None of the known keys. Surface whatever scalar entries the
-      -- dictionary carries rather than discarding the diagnosis (#32).
-      -- Userdata values (event descriptors) are skipped: their tostring is
-      -- a page of hex, not a message.
+      -- None of the known keys. Surface whatever the dictionary carries
+      -- rather than discarding the diagnosis (#32): scalar values verbatim
+      -- (userdata event descriptors are skipped, their tostring is a page of
+      -- hex), and bare key names when no value is scalar - the key set alone
+      -- says which error family this is.
       local parts = {}
       for key, value in pairs(descriptor) do
         local kind = type(value)
@@ -73,19 +74,40 @@ if not ok then
           parts[#parts + 1] = tostring(key) .. "=" .. tostring(value)
         end
       end
+      if #parts == 0 then
+        for key in pairs(descriptor) do parts[#parts + 1] = tostring(key) end
+      end
       table.sort(parts)
       if #parts > 0 then
         message = message .. ": " .. table.concat(parts, "; ")
       end
     end
+  elseif descriptor ~= nil and tostring(descriptor) ~= "" then
+    -- Defensive: the documented failure shape is a table, but a string
+    -- descriptor is still a diagnostic worth more than a bare message.
+    message = message .. ": " .. tostring(descriptor)
   end
   error(message, 0)
 end
 
 local raw = type(descriptor) == "string" and descriptor or nil
 
+-- "null()" is a script that returned nothing; "'msng'" is missing value,
+-- AppleScript's own null. Exact spellings, verified live. The exactness is a
+-- known shelf-life risk: if a future build renders the empty descriptor
+-- differently, the symptom is action-only scripts misreported as
+-- unrepresentable - extend this pair, do not loosen the nil-result check
+-- (a genuine date also has a nil result and MUST stay flagged).
 if result == nil and raw ~= nil and raw ~= "" and raw ~= "null()" and raw ~= "'msng'" then
   return { ok = true, raw = raw }
+end
+
+-- A result Lua holds but cannot encode (a binary string out of do shell
+-- script) would make the codec tostring THIS wrapper table - a pointer the
+-- caller never created. Prefer the raw source form, which is printable.
+local fine, encoded = pcall(hs.json.encode, { ok = true, result = result })
+if result ~= nil and (not fine or encoded == nil) then
+  return { ok = true, raw = (raw ~= nil and raw ~= "") and raw or "unrepresentable result" }
 end
 
 return { ok = true, result = result }
@@ -104,6 +126,12 @@ return { ok = true, result = result }
  *
  * An escape that decodes to an unpaired surrogate is left as literal text:
  * emitting half a character is worse than showing the escape.
+ *
+ * The doubling rule is verified for NSError description text. The unknown-key
+ * dump branch feeds raw dictionary values through here too, where doubling is
+ * unverified; a genuine backslash in such a value may decode wrongly. Accepted:
+ * that path is already a degraded diagnostic, and guessing would corrupt the
+ * common case to protect the rare one.
  */
 export function decodeNsStringEscapes(text: string): string {
   return text.replace(

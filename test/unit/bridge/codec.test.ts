@@ -163,6 +163,17 @@ describe('parseEnvelope', () => {
     expect(parsed.value).toMatchObject({ unencodable: true });
   });
 
+  it('drops a false wire flag at the parse boundary, so it can never leak (#37)', () => {
+    // readEnvelope is the single normalization point: present-and-true or
+    // absent, nothing else. Without this pin, weakening its === true check
+    // would hand every tool an unencodable:false field with the suite green.
+    const parsed = parseEnvelope(MARKER + '{"ok":true,"value":"x","unencodable":false}', MARKER);
+    expect(parsed.ok).toBe(true);
+    if (!parsed.ok) return;
+    expect(parsed.value).toEqual({ ok: true, value: 'x' });
+    expect('unencodable' in parsed.value).toBe(false);
+  });
+
   it.each([
     ['empty output', ''],
     ['only noise', '-- Loading extension: json'],
