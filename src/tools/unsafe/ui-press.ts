@@ -23,8 +23,13 @@ import { defineTool, fromBridge } from '../registry.js';
 const PRESS_LUA = lua`
 local app
 if ARGS.app then
-  app = hs.application.find(ARGS.app)
-  if not app then error("no running application matches '" .. tostring(ARGS.app) .. "'", 0) end
+  -- Exact, literal name matching (find's two flags): the bare default treats
+  -- the hint as a Lua PATTERN over lowercased app names AND window titles,
+  -- so a loose name could resolve a different application than the one that
+  -- was inspected - and a same-role press there passes every guard below.
+  -- Must stay identical to hs_ui_inspect's resolution, or paths cross apps.
+  app = hs.application.find(ARGS.app, true, true)
+  if not app then error("no running application is named '" .. tostring(ARGS.app) .. "' exactly", 0) end
 else
   app = hs.application.frontmostApplication()
   if not app then error("no application is frontmost", 0) end

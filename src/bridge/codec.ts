@@ -34,11 +34,11 @@ import { payloadTooLarge, protocolError, type BridgeError, type BridgeResult } f
 export const MAX_ENCODED_ARG_BYTES = 256 * 1024;
 
 export type LuaEnvelope =
-  // `unencodable` is present-and-true or absent, matching BridgeResult's
-  // shape exactly, so an envelope passes through envelopeToResult unchanged.
-  // readEnvelope is the single point that normalises the wire flag (#37).
-  | { readonly ok: true; readonly value: unknown; readonly unencodable?: true }
-  | { readonly ok: false; readonly err: string };
+  // The success arm IS BridgeResult's success arm - extracted, not copied -
+  // so envelopeToResult's pass-through is compiler-enforced rather than held
+  // in sync by a comment. readEnvelope is the single point that normalises
+  // the wire flag to this shape (#37).
+  Extract<BridgeResult<unknown>, { ok: true }> | { readonly ok: false; readonly err: string };
 
 export function encodeArgs(args: unknown): BridgeResult<string> {
   try {

@@ -26,8 +26,11 @@ import { defineTool, fromBridge } from '../registry.js';
 const INSPECT_LUA = lua`
 local app
 if ARGS.app then
-  app = hs.application.find(ARGS.app)
-  if not app then error("no running application matches '" .. tostring(ARGS.app) .. "'", 0) end
+  -- Exact, literal name matching, identical to hs_ui_press's resolution: the
+  -- two tools form one inspect-to-press contract, and resolving the name
+  -- differently on either side would let paths cross applications.
+  app = hs.application.find(ARGS.app, true, true)
+  if not app then error("no running application is named '" .. tostring(ARGS.app) .. "' exactly", 0) end
 else
   app = hs.application.frontmostApplication()
   if not app then error("no application is frontmost", 0) end

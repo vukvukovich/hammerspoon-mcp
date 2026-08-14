@@ -13,7 +13,7 @@ import type { BridgeResult } from '../../../src/bridge/errors.js';
 import { DocsIndex } from '../../../src/docs/docs-index.js';
 import { ALL_TOOLS } from '../../../src/tools/index.js';
 
-import { fakeBridge, handlerFor, stubDocs } from './tool-harness.js';
+import { fakeBridge, handlerFor, payloadOf, stubDocs } from './tool-harness.js';
 
 const SUCCESS: BridgeResult<unknown> = { ok: true, value: { fine: true } };
 
@@ -225,11 +225,11 @@ describe('read-back after acting (#17)', () => {
       {}
     );
 
-    const payload = JSON.parse(result.content[0]?.text ?? '{}') as {
+    const payload = payloadOf<{
       frame: Record<string, number>;
       adjusted: boolean;
       requested: Record<string, number>;
-    };
+    }>(result);
     expect(payload.frame).toEqual({ x: -960, y: 33, w: 1000, h: 600 });
     expect(payload.adjusted).toBe(true);
     expect(payload.requested).toEqual({ x: -5000, y: -5000 });
@@ -250,10 +250,10 @@ describe('read-back after acting (#17)', () => {
       {}
     );
 
-    const payload = JSON.parse(result.content[0]?.text ?? '{}') as {
+    const payload = payloadOf<{
       adjusted: boolean;
       requested?: unknown;
-    };
+    }>(result);
     expect(payload.adjusted).toBe(false);
     expect(payload.requested).toBeUndefined();
   });
@@ -270,10 +270,10 @@ describe('read-back after acting (#17)', () => {
       {}
     );
 
-    const payload = JSON.parse(result.content[0]?.text ?? '{}') as {
+    const payload = payloadOf<{
       arrived: boolean;
       id: number;
-    };
+    }>(result);
     expect(payload.arrived).toBe(true);
     expect(payload.id).toBe(4);
   });
@@ -301,10 +301,10 @@ describe('read-back after acting (#17)', () => {
       {}
     );
 
-    const payload = JSON.parse(result.content[0]?.text ?? '{}') as {
+    const payload = payloadOf<{
       arrived: boolean;
       id: number;
-    };
+    }>(result);
     expect(payload.arrived).toBe(true);
     expect(payload.id).toBe(7);
   }, 10_000);
@@ -337,7 +337,7 @@ describe('read-back after acting (#17)', () => {
       {}
     );
 
-    const payload = JSON.parse(result.content[0]?.text ?? '{}') as { track: string };
+    const payload = payloadOf<{ track: string }>(result);
     expect(payload.track).toBe('New Song');
     expect(statusReads).toBeGreaterThanOrEqual(2);
   }, 10_000);
@@ -367,11 +367,11 @@ describe('unencodable results (#29)', () => {
       {}
     );
 
-    const payload = JSON.parse(result.content[0]?.text ?? '{}') as {
+    const payload = payloadOf<{
       value: string;
       encodable: boolean;
       hint: string;
-    };
+    }>(result);
     expect(payload.encodable).toBe(false);
     expect(payload.value).toBe('table: 0x600002a1c000');
     expect(payload.hint).toContain('Return specific fields');
@@ -417,9 +417,9 @@ describe('hs_api_search', () => {
 
   it('returns the qualified name and exact signature', async () => {
     const { result } = await search({ query: 'setFrame', limit: 10 });
-    const payload = JSON.parse(result.content[0]?.text ?? '{}') as {
+    const payload = payloadOf<{
       results: { qualifiedName: string; signature: string; kind: string }[];
-    };
+    }>(result);
     expect(payload.results[0]).toMatchObject({
       qualifiedName: 'hs.window.setFrame',
       kind: 'Method',
@@ -429,19 +429,19 @@ describe('hs_api_search', () => {
 
   it('reports the total separately from the page it returned', async () => {
     const { result } = await search({ query: 'hs', limit: 2 });
-    const payload = JSON.parse(result.content[0]?.text ?? '{}') as {
+    const payload = payloadOf<{
       totalMatches: number;
       showing: number;
-    };
+    }>(result);
     expect(payload.showing).toBe(2);
     expect(payload.totalMatches).toBeGreaterThan(2);
   });
 
   it('honours the module filter', async () => {
     const { result } = await search({ query: 'show', module: 'alert', limit: 10 });
-    const payload = JSON.parse(result.content[0]?.text ?? '{}') as {
+    const payload = payloadOf<{
       results: { module: string }[];
-    };
+    }>(result);
     expect(payload.results.every((hit) => hit.module === 'hs.alert')).toBe(true);
   });
 

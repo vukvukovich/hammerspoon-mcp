@@ -51,11 +51,18 @@ local ok, result, descriptor = hs.osascript.applescript(ARGS.script)
 if not ok then
   local message = "AppleScript failed"
   if type(descriptor) == "table" then
-    local detail = descriptor.NSLocalizedDescription
-      or descriptor.OSAScriptErrorMessageKey
-      or descriptor.OSAScriptErrorBriefMessageKey
+    -- Empty string is "no message", not a message (#18's class): a dict
+    -- carrying NSLocalizedDescription = "" must fall through to the next
+    -- key, not short-circuit Lua's or-chain and ship "AppleScript failed: ".
+    local function nonempty(text)
+      if type(text) == "string" and text ~= "" then return text end
+      return nil
+    end
+    local detail = nonempty(descriptor.NSLocalizedDescription)
+      or nonempty(descriptor.OSAScriptErrorMessageKey)
+      or nonempty(descriptor.OSAScriptErrorBriefMessageKey)
     if detail then
-      message = message .. ": " .. tostring(detail)
+      message = message .. ": " .. detail
       if descriptor.OSAScriptErrorNumberKey then
         message = message .. " (error " .. tostring(descriptor.OSAScriptErrorNumberKey) .. ")"
       end
@@ -127,7 +134,13 @@ if result ~= nil then
   -- skip it entirely.
   local plain = encodable({ ok = true, result = result })
   if plain then return plain end
-  local viaRaw = (raw ~= nil and raw ~= "") and encodable({ ok = true, raw = raw }) or nil
+  -- resultUnencodable marks this raw as a DIFFERENT situation from the
+  -- nil-result raw above: here a Lua value existed but would not encode
+  -- (binary bytes, most often), and the hint must not claim the value had
+  -- no Lua equivalent.
+  local viaRaw = (raw ~= nil and raw ~= "")
+    and encodable({ ok = true, raw = raw, resultUnencodable = true })
+    or nil
   if viaRaw then return viaRaw end
   -- No representable form at all. Say exactly that, with no fabricated
   -- stand-in value that could be mistaken for a genuine descriptor.
@@ -184,19 +197,27 @@ export function decodeNsStringEscapes(text: string): string {
 const RAW_RESULT_HINT =
   'AppleScript returned a value Hammerspoon could not turn into a Lua type, so only its raw source form is shown. Coerce it inside the script when you need the value, for example: return (current date) as string';
 
-// Distinct from RAW_RESULT_HINT because the diagnosis differs: here the value
-// existed but no readable form of it survived, and coercing to a plain type
-// is the only way to get anything out.
+// Distinct hints because the diagnoses differ. RESULT_UNENCODABLE_HINT: a Lua
+// value existed but would not encode, so "no Lua equivalent" would be false.
+// NO_RAW_HINT: the value existed but no readable form of it survived at all.
+const RESULT_UNENCODABLE_HINT =
+  'The script returned a value, but it could not be represented as JSON (binary or invalid text, most often), so its raw source form is shown. Transform it inside the script when you need the content, for example by base64-encoding binary before returning it.';
+
 const NO_RAW_HINT =
   'The script succeeded, but its result could not be represented and no readable raw form was available either. If you need the value, coerce it to a plain type inside the script, for example: return (theResult as string)';
 
 function renderAppleScriptResult(value: unknown): CallToolResult {
-  const record = value as { raw?: unknown; rawUnavailable?: unknown } | null;
+  const record = value as {
+    raw?: unknown;
+    rawUnavailable?: unknown;
+    resultUnencodable?: unknown;
+  } | null;
   if (record !== null && typeof record === 'object') {
     // { ok: true } rides along because this tool's plain successes carry ok,
     // and it must not vanish on exactly the degraded payloads (#35).
     if (typeof record.raw === 'string') {
-      return unrepresentableResult(record.raw, RAW_RESULT_HINT, { ok: true });
+      const hint = record.resultUnencodable === true ? RESULT_UNENCODABLE_HINT : RAW_RESULT_HINT;
+      return unrepresentableResult(record.raw, hint, { ok: true });
     }
     if (record.rawUnavailable === true) {
       return unrepresentableResult(null, NO_RAW_HINT, { ok: true });
