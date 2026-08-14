@@ -241,6 +241,17 @@ describe('envelope forgery resistance', () => {
     expect(program).toContain('unencodable = true');
     expect(program).toContain('result could not be encoded');
   });
+
+  it('never calls tostring unprotected, so a throwing __tostring still yields an envelope (#34)', () => {
+    // tostring(__res) used to run while building the encode argument, outside
+    // any pcall. A value with a throwing __tostring metamethod then raised at
+    // chunk top level, no marker line was printed, and the caller saw a
+    // ProtocolError instead of the unencodable report. Both wrapper paths must
+    // stringify through the pcall-guarded helper.
+    const program = buildProgram('return 1', 'e30=', MARKER);
+    expect(program).toContain('pcall(tostring, value)');
+    expect(program).not.toContain('tostring(__res)');
+  });
 });
 
 describe('envelopeToResult', () => {

@@ -107,17 +107,29 @@ export function buildProgram(luaBody: string, encodedArgs: string, marker: strin
     'local __ok, __res = pcall(function()',
     luaBody,
     'end)',
+    // tostring must run inside its own pcall: it is evaluated while building
+    // the encode argument, before the pcall around hs.json.encode protects
+    // anything, and a __tostring metamethod can throw (#34). Unprotected, that
+    // raised at chunk top level, printed no marker line, and surfaced as a
+    // ProtocolError instead of the report this fallback exists to produce.
+    'local function __stringify(value, fallback)',
+    '  local ok, text = pcall(tostring, value)',
+    '  if ok and type(text) == "string" then return text end',
+    '  return fallback',
+    'end',
     'local __payload',
     'if __ok then',
     '  local __fine, __encoded = pcall(hs.json.encode, { ok = true, value = __res })',
     '  if __fine and __encoded ~= nil then',
     '    __payload = __encoded',
     '  else',
-    '    local __ok2, __alt = pcall(hs.json.encode, { ok = true, value = tostring(__res), unencodable = true })',
+    '    local __str = __stringify(__res, "value whose tostring also failed")',
+    '    local __ok2, __alt = pcall(hs.json.encode, { ok = true, value = __str, unencodable = true })',
     '    __payload = (__ok2 and __alt) or nil',
     '  end',
     'else',
-    '  local __ok3, __errJson = pcall(hs.json.encode, { ok = false, err = tostring(__res) })',
+    '  local __err = __stringify(__res, "error value whose tostring failed")',
+    '  local __ok3, __errJson = pcall(hs.json.encode, { ok = false, err = __err })',
     '  __payload = (__ok3 and __errJson) or nil',
     'end',
     'if __payload == nil then',
