@@ -720,6 +720,47 @@ return true
     }
   }, 30_000);
 
+  // #28: every failure used to be a bare "AppleScript failed", because the
+  // error dictionary is the THIRD return value and the code read the second.
+  it('hs_applescript reports the real error message and number (#28)', async () => {
+    const failure = (await runTool('hs_applescript', {
+      script: 'return undefinedVariable123',
+    })) as unknown as { isError?: boolean; content: { text: string }[] };
+
+    expect(failure.isError).toBe(true);
+    const text = failure.content[0]?.text ?? '';
+    expect(text).toContain('undefinedVariable123 is not defined');
+    expect(text).toContain('-2753');
+  });
+
+  it('hs_applescript flags a result with no Lua equivalent (#28)', async () => {
+    const unrepresentable = (await runTool('hs_applescript', {
+      script: 'return current date',
+    })) as unknown as { isError?: boolean; content: { text: string }[] };
+    expect(unrepresentable.isError).not.toBe(true);
+    const payload = JSON.parse(unrepresentable.content[0]?.text ?? '{}') as {
+      representable: boolean;
+      raw?: string;
+      hint?: string;
+    };
+    // A date cannot become a Lua value, so it must arrive as its raw form
+    // with the flag set, never as a bare success carrying nothing.
+    expect(payload.representable).toBe(false);
+    expect(payload.raw).toBeTruthy();
+    expect(payload.hint).toContain('Coerce it');
+
+    // And the coercion the hint suggests genuinely works.
+    const coerced = (await runTool('hs_applescript', {
+      script: 'return (current date) as string',
+    })) as unknown as { content: { text: string }[] };
+    const coercedPayload = JSON.parse(coerced.content[0]?.text ?? '{}') as {
+      representable: boolean;
+      result: string;
+    };
+    expect(coercedPayload.representable).toBe(true);
+    expect(typeof coercedPayload.result).toBe('string');
+  });
+
   it('hs_eval compiles supplied code with load instead of splicing it', async () => {
     const tool = ALL_TOOLS.find((candidate) => candidate.name === 'hs_eval');
     expect(tool?.tier).toBe('unsafe');
