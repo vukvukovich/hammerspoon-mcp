@@ -93,6 +93,21 @@ export function jsonResult(value: unknown): CallToolResult {
 }
 
 /**
+ * The one wire shape for "this value could not be represented, here is its
+ * string form" (#35). Every tool that hits the situation renders through this,
+ * so a caller learns a single vocabulary: `encodable: false`, the string form
+ * in `value`, and a hint saying what to do about it. Only the hint varies,
+ * because what to do depends on where the value failed to cross.
+ */
+export function unrepresentableResult(value: unknown, hint: string): CallToolResult {
+  return jsonResult({ value, encodable: false, hint });
+}
+
+/** The hint for values Lua itself could not encode, used by fromBridge. */
+const LUA_UNENCODABLE_HINT =
+  'Lua could not represent this value as JSON, so only its tostring form is shown. Cyclic tables, tables mixing array and named keys, functions, and userdata handles all do this. Return specific fields instead, for example the id or name you need.';
+
+/**
  * Standard mapping from a bridge outcome to a tool result.
  *
  * Failures come back as `isError` with the actionable hint attached, so the
@@ -107,14 +122,14 @@ export function fromBridge(
     // A value Lua could not encode arrives as its tostring form, which is
     // indistinguishable from a genuine string ("table: 0x...") unless it is
     // labelled. Saying so beats handing back a pointer as though it were the
-    // answer (#29). The tool's own renderer is bypassed here on purpose: it
-    // was written to shape a real value, and there is not one.
+    // answer (#29). The tool's own renderer is bypassed here on purpose, and
+    // the carve-out is part of fromBridge's contract: a custom renderer is
+    // written to shape a real value, there is not one, and handing it the
+    // tostring form would let it dress a pointer up as the answer. A tool that
+    // needs to add context even then should not use fromBridge's renderer
+    // parameter for it.
     if (result.unencodable === true) {
-      return jsonResult({
-        value: result.value,
-        encodable: false,
-        hint: 'Lua could not represent this value as JSON, so only its tostring form is shown. Cyclic tables, tables mixing array and named keys, functions, and userdata handles all do this. Return specific fields instead, for example the id or name you need.',
-      });
+      return unrepresentableResult(result.value, LUA_UNENCODABLE_HINT);
     }
     return render(result.value);
   }
