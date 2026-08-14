@@ -91,9 +91,11 @@ describe('every tool', () => {
     const { bridge, calls } = fakeBridge(SUCCESS);
     const handler = handlerFor(name, { bridge, docs: stubDocs });
 
-    // Arguments that satisfy every schema in the set.
+    // Arguments that satisfy every schema in the set. expectRole is there for
+    // hs_ui_press, whose handler refuses to bridge a press that carries no
+    // expectation at all (#36).
     await handler(
-      { id: 1, text: 'hi', name: 'Safari', code: 'return 1', lines: 5, timeoutMs: 1000 },
+      { id: 1, text: 'hi', name: 'Safari', code: 'return 1', lines: 5, timeoutMs: 1000, expectRole: 'AXButton' },
       {}
     );
 
@@ -128,7 +130,7 @@ describe('every tool', () => {
       };
       const { bridge } = fakeBridge(failure);
       const result = await handlerFor(name, { bridge, docs: stubDocs })(
-        { id: 1, text: 'hi', name: 'Safari', code: 'return 1', lines: 5, timeoutMs: 1000 },
+        { id: 1, text: 'hi', name: 'Safari', code: 'return 1', lines: 5, timeoutMs: 1000, expectRole: 'AXButton' },
         {}
       );
 
@@ -137,6 +139,31 @@ describe('every tool', () => {
       expect(result.content[0]?.text).toContain('Open Hammerspoon');
     }
   );
+});
+
+describe('hs_ui_press expectation guard (#36)', () => {
+  it('refuses a press carrying neither expectLabel nor expectRole, without bridging', async () => {
+    const { bridge, calls } = fakeBridge(SUCCESS);
+    const result = await handlerFor('hs_ui_press', { bridge, docs: stubDocs })(
+      { path: '/1/2', app: 'Calculator' },
+      {}
+    );
+    expect(result.isError).toBe(true);
+    expect(result.content[0]?.text).toContain('expectLabel');
+    // Refused before any Lua ran: an unchecked press must not reach the machine.
+    expect(calls.length).toBe(0);
+  });
+
+  it('bridges a press that carries an expectation', async () => {
+    const { bridge, calls } = fakeBridge(SUCCESS);
+    const result = await handlerFor('hs_ui_press', { bridge, docs: stubDocs })(
+      { path: '/1/2', expectLabel: '7' },
+      {}
+    );
+    expect(result.isError).not.toBe(true);
+    expect(calls.length).toBe(1);
+    expect(calls[0]?.args).toMatchObject({ path: '/1/2', expectLabel: '7' });
+  });
 });
 
 describe('argument routing', () => {

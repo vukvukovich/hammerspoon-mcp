@@ -1,7 +1,7 @@
 import { z } from 'zod';
 
 import { lua } from '../../bridge/lua.js';
-import { defineTool, fromBridge } from '../registry.js';
+import { defineTool, errorResult, fromBridge } from '../registry.js';
 
 /**
  * Performing an accessibility action, which means clicking things.
@@ -85,15 +85,18 @@ local label = labelOf(element)
 -- inserts a Delete button once its display has input, shifting every later
 -- sibling by one), so the second press planned from one inspection lands on
 -- the wrong element. Validity is not identity, so compare before acting.
-if ARGS.expectLabel ~= nil and label ~= ARGS.expectLabel then
-  error("refusing to act: expected the element at " .. ARGS.path .. " to be labelled '"
-    .. tostring(ARGS.expectLabel) .. "', found " .. (label and ("'" .. label .. "'") or "no label")
+-- The handler guarantees at least one expectation is present (#36).
+local function refuse(expected, found)
+  error("refusing to act: expected the element at " .. ARGS.path .. " to be " .. expected
+    .. ", found " .. found
     .. ". Pressing reshapes the tree, so re-run hs_ui_inspect for current paths.", 0)
 end
+if ARGS.expectLabel ~= nil and label ~= ARGS.expectLabel then
+  refuse("labelled '" .. tostring(ARGS.expectLabel) .. "'",
+    label and ("'" .. label .. "'") or "no label")
+end
 if ARGS.expectRole ~= nil and role ~= ARGS.expectRole then
-  error("refusing to act: expected the element at " .. ARGS.path .. " to be a "
-    .. tostring(ARGS.expectRole) .. ", found " .. role
-    .. ". Pressing reshapes the tree, so re-run hs_ui_inspect for current paths.", 0)
+  refuse("a " .. tostring(ARGS.expectRole), role)
 end
 
 local okActions, available = pcall(function() return element:actionNames() end)
@@ -117,9 +120,11 @@ return {
   role = role,
   label = label,
   action = wanted,
-  -- False means nothing was checked against the caller's expectation, so the
-  -- element pressed is whatever the path happened to resolve to just now.
-  verified = ARGS.expectLabel ~= nil or ARGS.expectRole ~= nil,
+  -- What the press was checked against. "label" is an identity check;
+  -- "role" only proves the element is the same KIND as expected, which every
+  -- sibling in a keypad or toolbar also is (#36). The handler refuses a call
+  -- carrying neither, so an unchecked press does not exist.
+  verified = (ARGS.expectLabel ~= nil) and "label" or "role",
 }
 `;
 
@@ -128,7 +133,7 @@ export const pressUiTool = defineTool({
   tier: 'unsafe',
   title: 'Press a UI element',
   description:
-    'Perform an accessibility action on an element found by hs_ui_inspect, usually pressing a button. This acts with the full authority of the user in any application. ALWAYS pass expectLabel (the label hs_ui_inspect reported for that path): pressing an element frequently reshapes the tree around it, so paths from an earlier inspection can silently point at a different element, and expectLabel is what turns that into a refusal instead of a wrong click. Re-run hs_ui_inspect after each press rather than reusing paths from before it.',
+    'Perform an accessibility action on an element found by hs_ui_inspect, usually pressing a button. This acts with the full authority of the user in any application. At least one of expectLabel or expectRole is required: pressing an element frequently reshapes the tree around it, so paths from an earlier inspection can silently point at a different element, and the expectation is what turns that into a refusal instead of a wrong click. Pass expectLabel (the label hs_ui_inspect reported) whenever the element has one; expectRole alone only proves the element is the same kind, not the same element. Re-run hs_ui_inspect after each press rather than reusing paths from before it.',
   inputSchema: z.object({
     path: z
       .string()
@@ -169,5 +174,17 @@ export const pressUiTool = defineTool({
       .describe('Accessibility action name. hs_ui_inspect lists what each element supports.'),
   }),
   annotations: { destructiveHint: true, openWorldHint: true },
-  handler: async (args, { bridge }) => fromBridge(await bridge.run(PRESS_LUA, args)),
+  handler: async (args, { bridge }) => {
+    // The identity guard is structural, not advisory (#36): a press that
+    // checks nothing lands wherever a shifted path happens to point, so a
+    // call carrying no expectation is refused before it reaches the machine.
+    // This lives here rather than in a zod refine because defineTool's
+    // inputSchema must stay a plain ZodObject.
+    if (args.expectLabel === undefined && args.expectRole === undefined) {
+      return errorResult(
+        'refusing to act: pass expectLabel (the label hs_ui_inspect reported for this path) or, for unlabelled elements, expectRole. Without one, a press lands on whatever the path resolves to now, which is not necessarily the element that was inspected.'
+      );
+    }
+    return fromBridge(await bridge.run(PRESS_LUA, args));
+  },
 });
