@@ -7,4 +7,4 @@
  * package.json, so drift fails CI instead of shipping.
  */
 export const SERVER_NAME = 'hammerspoon-mcp';
-export const SERVER_VERSION = '0.3.0';
+export const SERVER_VERSION = '0.4.0';
