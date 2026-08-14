@@ -279,10 +279,7 @@ describe('envelopeToResult', () => {
   });
 
   it('leaves the flag off an ordinary success, so a plain result stays plain', () => {
-    const result = envelopeToResult(
-      { ok: true, value: 'table: 0x600002a1c000' },
-      luaError
-    );
+    const result = envelopeToResult({ ok: true, value: 'table: 0x600002a1c000' }, luaError);
     expect(result).toEqual({ ok: true, value: 'table: 0x600002a1c000' });
     expect('unencodable' in result).toBe(false);
   });

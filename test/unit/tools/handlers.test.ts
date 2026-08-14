@@ -95,7 +95,15 @@ describe('every tool', () => {
     // hs_ui_press, whose handler refuses to bridge a press that carries no
     // expectation at all (#36).
     await handler(
-      { id: 1, text: 'hi', name: 'Safari', code: 'return 1', lines: 5, timeoutMs: 1000, expectRole: 'AXButton' },
+      {
+        id: 1,
+        text: 'hi',
+        name: 'Safari',
+        code: 'return 1',
+        lines: 5,
+        timeoutMs: 1000,
+        expectRole: 'AXButton',
+      },
       {}
     );
 
@@ -130,7 +138,15 @@ describe('every tool', () => {
       };
       const { bridge } = fakeBridge(failure);
       const result = await handlerFor(name, { bridge, docs: stubDocs })(
-        { id: 1, text: 'hi', name: 'Safari', code: 'return 1', lines: 5, timeoutMs: 1000, expectRole: 'AXButton' },
+        {
+          id: 1,
+          text: 'hi',
+          name: 'Safari',
+          code: 'return 1',
+          lines: 5,
+          timeoutMs: 1000,
+          expectRole: 'AXButton',
+        },
         {}
       );
 
