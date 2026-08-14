@@ -1,7 +1,16 @@
 import { z } from 'zod';
 
 import { lua } from '../../bridge/lua.js';
-import { defineTool, fromBridge } from '../registry.js';
+import { luaError, formatBridgeError } from '../../bridge/errors.js';
+import {
+  defineTool,
+  errorResult,
+  fromBridge,
+  jsonResult,
+  unrepresentableResult,
+  type ToolContext,
+} from '../registry.js';
+import type { CallToolResult } from '@modelcontextprotocol/server';
 
 /**
  * Running AppleScript. Gated, for the same reason hs_eval is.
@@ -27,21 +36,19 @@ import { defineTool, fromBridge } from '../registry.js';
 //   failure: result is nil, descriptor is the error dictionary
 //   success: result is the parsed value, descriptor is its raw source form
 //
-// The parsed value is nil for anything Hammerspoon cannot turn into a Lua
-// type (a date, for instance), and a nil silently vanishes from the encoded
-// table, so the caller used to get a bare success carrying no value at all.
-// There the raw form is the only thing left worth handing back.
+// Two raw forms mean "no value", not "unrepresentable value" (#32): "null()"
+// is a script that returned nothing (most action-only scripts), and "'msng'"
+// is AppleScript's own null, `missing value`. Both are successes with a null
+// result. Only a raw form beyond those marks a value Hammerspoon genuinely
+// could not turn into a Lua type (a date, raw event data), where the raw form
+// is the only thing left worth handing back.
+//
+// Error text arrives with non-ASCII escaped NSString-style ("Can\U2019t").
+// Decoding lives in TypeScript (decodeNsStringEscapes below), where surrogate
+// pairs can be handled correctly and the logic is unit-testable; the Lua side
+// passes the text through untouched.
 const APPLESCRIPT_LUA = lua`
 local ok, result, descriptor = hs.osascript.applescript(ARGS.script)
-
--- NSError descriptions arrive with non-ASCII escaped, so AppleScript's smart
--- quotes reach the caller as "Can\\U2019t divide". Put the characters back.
-local function readable(text)
-  local decoded = string.gsub(tostring(text), "\\\\U(%x%x%x%x)", function(hex)
-    return utf8.char(tonumber(hex, 16))
-  end)
-  return decoded
-end
 
 if not ok then
   local message = "AppleScript failed"
@@ -49,36 +56,105 @@ if not ok then
     local detail = descriptor.NSLocalizedDescription
       or descriptor.OSAScriptErrorMessageKey
       or descriptor.OSAScriptErrorBriefMessageKey
-    if detail then message = message .. ": " .. readable(detail) end
-    if descriptor.OSAScriptErrorNumberKey then
-      message = message .. " (error " .. tostring(descriptor.OSAScriptErrorNumberKey) .. ")"
+    if detail then
+      message = message .. ": " .. tostring(detail)
+      if descriptor.OSAScriptErrorNumberKey then
+        message = message .. " (error " .. tostring(descriptor.OSAScriptErrorNumberKey) .. ")"
+      end
+    else
+      -- None of the known keys. Surface whatever scalar entries the
+      -- dictionary carries rather than discarding the diagnosis (#32).
+      -- Userdata values (event descriptors) are skipped: their tostring is
+      -- a page of hex, not a message.
+      local parts = {}
+      for key, value in pairs(descriptor) do
+        local kind = type(value)
+        if kind == "string" or kind == "number" or kind == "boolean" then
+          parts[#parts + 1] = tostring(key) .. "=" .. tostring(value)
+        end
+      end
+      table.sort(parts)
+      if #parts > 0 then
+        message = message .. ": " .. table.concat(parts, "; ")
+      end
     end
-  elseif result ~= nil then
-    message = message .. ": " .. tostring(result)
   end
   error(message, 0)
 end
 
 local raw = type(descriptor) == "string" and descriptor or nil
 
-if result == nil and raw ~= nil and raw ~= "" then
-  return {
-    ok = true,
-    raw = raw,
-    representable = false,
-    hint = "AppleScript returned a value with no Lua equivalent, so only its raw form is available. Coerce it inside the script, for example: return (current date) as string",
-  }
+if result == nil and raw ~= nil and raw ~= "" and raw ~= "null()" and raw ~= "'msng'" then
+  return { ok = true, raw = raw }
 end
 
-return { ok = true, result = result, representable = true }
+return { ok = true, result = result }
 `;
+
+/**
+ * Decodes NSString-style escapes in AppleScript error text.
+ *
+ * NSError descriptions escape non-ASCII as \\Uxxxx per UTF-16 code unit, so a
+ * character outside the Basic Multilingual Plane arrives as TWO escapes (a
+ * surrogate pair) that must be decoded together; decoding them separately
+ * produces invalid UTF-8, which is how #32 mangled emoji in error messages. A
+ * literal backslash in the original text arrives doubled ("\\\\"), verified
+ * live, which is what makes decoding exact rather than heuristic: "\\\\U0041"
+ * is the four literal characters \\U0041, not an escape.
+ *
+ * An escape that decodes to an unpaired surrogate is left as literal text:
+ * emitting half a character is worse than showing the escape.
+ */
+export function decodeNsStringEscapes(text: string): string {
+  return text.replace(
+    // Ordered alternation: a doubled backslash first (so it can never be
+    // read as starting an escape), then a full surrogate pair, then a
+    // single escape.
+    /\\\\|\\U([Dd][89ABab][0-9A-Fa-f]{2})\\U([Dd][C-Fc-f][0-9A-Fa-f]{2})|\\U([0-9A-Fa-f]{4})/g,
+    (match, high: string | undefined, low: string | undefined, single: string | undefined) => {
+      if (match === '\\\\') return '\\';
+      if (high !== undefined && low !== undefined) {
+        return String.fromCharCode(parseInt(high, 16), parseInt(low, 16));
+      }
+      if (single !== undefined) {
+        const unit = parseInt(single, 16);
+        // An unpaired surrogate half: leave the escape visible.
+        if (unit >= 0xd800 && unit <= 0xdfff) return match;
+        return String.fromCharCode(unit);
+      }
+      return match;
+    }
+  );
+}
+
+const RAW_RESULT_HINT =
+  'AppleScript returned a value Hammerspoon could not turn into a Lua type, so only its raw source form is shown. Coerce it inside the script when you need the value, for example: return (current date) as string';
+
+function renderAppleScriptResult(value: unknown): CallToolResult {
+  const record = value as { raw?: unknown } | null;
+  if (record !== null && typeof record === 'object' && typeof record.raw === 'string') {
+    return unrepresentableResult(record.raw, RAW_RESULT_HINT);
+  }
+  return jsonResult(value);
+}
+
+async function runAppleScript(
+  args: { script: string },
+  { bridge }: ToolContext
+): Promise<CallToolResult> {
+  const result = await bridge.run(APPLESCRIPT_LUA, args, { timeoutMs: 30_000 });
+  if (!result.ok && result.error.kind === 'LuaError') {
+    return errorResult(formatBridgeError(luaError(decodeNsStringEscapes(result.error.message))));
+  }
+  return fromBridge(result, renderAppleScriptResult);
+}
 
 export const appleScriptTool = defineTool({
   name: 'hs_applescript',
   tier: 'unsafe',
   title: 'Run AppleScript',
   description:
-    'Execute an AppleScript and return its result. This reaches applications that expose no other automation interface, such as Mail, Notes, Reminders, and Finder selections. Failures report the AppleScript error message and number. A result with no Lua equivalent (a date, for example) comes back as representable=false with its raw form, so coerce it in the script when you need the value. It is arbitrary code execution with full user authority, which is why it is gated alongside hs_eval.',
+    'Execute an AppleScript and return its result. This reaches applications that expose no other automation interface, such as Mail, Notes, Reminders, and Finder selections. Failures report the AppleScript error message and number. A script that returns nothing (or missing value) reports a plain success with no result. A result with no Lua equivalent (a date, for example) comes back as encodable=false with its raw form, so coerce it in the script when you need the value. It is arbitrary code execution with full user authority, which is why it is gated alongside hs_eval.',
   inputSchema: z.object({
     script: z
       .string()
@@ -87,6 +163,5 @@ export const appleScriptTool = defineTool({
       .describe('AppleScript source. Use `tell application "Name" ... end tell` to target an app.'),
   }),
   annotations: { destructiveHint: true, openWorldHint: true },
-  handler: async (args, { bridge }) =>
-    fromBridge(await bridge.run(APPLESCRIPT_LUA, args, { timeoutMs: 30_000 })),
+  handler: runAppleScript,
 });
