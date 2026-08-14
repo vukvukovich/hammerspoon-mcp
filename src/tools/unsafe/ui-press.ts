@@ -38,6 +38,11 @@ end
 -- The path is the child-index trail hs_ui_inspect reported, "/1/3/2". Walking
 -- it again rather than holding a handle keeps this stateless, and it means a
 -- stale path fails loudly instead of acting on the wrong element.
+-- Typed check before gmatch: a schema-bypassing caller can hand path any
+-- type, and "bad argument #1 to 'gmatch'" diagnoses nothing.
+if type(ARGS.path) ~= "string" then
+  error("path must be a string of child indexes from hs_ui_inspect, such as \\"/1/3/2\\"", 0)
+end
 local steps = {}
 for step in string.gmatch(ARGS.path, "[^/]+") do steps[#steps + 1] = tonumber(step) end
 if #steps == 0 then error("path '" .. tostring(ARGS.path) .. "' selects no element", 0) end
@@ -109,8 +114,13 @@ if ARGS.expectRole ~= nil and role ~= ARGS.expectRole then
   refuse("a " .. tostring(ARGS.expectRole), role)
 end
 
-local okActions, available = pcall(function() return element:actionNames() end)
-if not okActions or type(available) ~= "table" then available = {} end
+local function actionsOf(element)
+  local ok, names = pcall(function() return element:actionNames() end)
+  if ok and type(names) == "table" and #names > 0 then return names end
+  return nil
+end
+
+local available = actionsOf(element) or {}
 local wanted = ARGS.action or "AXPress"
 local supported = false
 for _, name in ipairs(available) do
@@ -121,8 +131,16 @@ if not supported then
     .. wanted .. ". It supports: " .. (#available > 0 and table.concat(available, ", ") or "nothing"), 0)
 end
 
-local ok, err = pcall(function() return element:performAction(wanted) end)
-if not ok then error("performing " .. wanted .. " failed: " .. tostring(err), 0) end
+-- performAction reports failure two ways and both must be checked: a raise
+-- (caught by pcall), and a false/nil FIRST RETURN with the reason second.
+-- Ignoring the return value reported failed presses as verified successes.
+local okPress, outcome, pressErr = pcall(function() return element:performAction(wanted) end)
+if not okPress then error("performing " .. wanted .. " failed: " .. tostring(outcome), 0) end
+if outcome == false or outcome == nil then
+  error("performing " .. wanted .. " failed"
+    .. (pressErr ~= nil and (": " .. tostring(pressErr)) or ": the element did not accept the action")
+    .. ". The press did NOT happen.", 0)
+end
 
 return {
   app = app:name(),
@@ -144,7 +162,7 @@ export const pressUiTool = defineTool({
   tier: 'unsafe',
   title: 'Press a UI element',
   description:
-    'Perform an accessibility action on an element found by hs_ui_inspect, usually pressing a button. This acts with the full authority of the user in any application. At least one of expectLabel or expectRole is required: pressing an element frequently reshapes the tree around it, so paths from an earlier inspection can silently point at a different element, and the expectation is what turns that into a refusal instead of a wrong click. Pass expectLabel (the label hs_ui_inspect reported) whenever the element has one; expectRole alone only proves the element is the same kind, not the same element. Re-run hs_ui_inspect after each press rather than reusing paths from before it.',
+    'Perform an accessibility action on an element found by hs_ui_inspect, usually pressing a button. This acts with the full authority of the user in any application. At least one of expectLabel or expectRole is required: pressing an element frequently reshapes the tree around it, so paths from an earlier inspection can silently point at a different element, and the expectation is what turns that into a refusal instead of a wrong click. Pass expectLabel (the label hs_ui_inspect reported) whenever the element has one; expectRole alone only proves the element is the same kind, not the same element. The result\'s verified field says which check ran: "label" (identity) or "role" (kind only - the label field alongside it was read but never compared). Re-run hs_ui_inspect after each press rather than reusing paths from before it.',
   inputSchema: z
     .object({
       path: z
@@ -156,10 +174,12 @@ export const pressUiTool = defineTool({
       expectLabel: z
         .string()
         .min(1)
-        // Generous on purpose: hs_ui_inspect returns labels untruncated, and a
-        // cap shorter than what inspect can emit forces the caller into an
-        // unverified press on exactly the elements with descriptive labels (#31).
-        .max(2000)
+        // Generous on purpose: hs_ui_inspect returns labels untruncated, and
+        // any cap it can exceed forces the caller into weaker role-only
+        // verification on exactly the elements with descriptive labels (#31).
+        // AXHelp tooltip text runs to paragraphs, so this sits far above
+        // anything observed in practice rather than merely above the typical.
+        .max(10_000)
         .optional()
         .describe(
           'The label hs_ui_inspect reported for this path. The press is refused if the element there no longer carries it. Omit only for elements that have no label.'

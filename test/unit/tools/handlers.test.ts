@@ -56,6 +56,22 @@ function handlerFor(name: string, context: ToolContext) {
 const stubDocs = new DocsIndex('/nonexistent/docs.json');
 const SUCCESS: BridgeResult<unknown> = { ok: true, value: { fine: true } };
 
+/** The zod schema a tool advertises, captured off a stub registration. */
+function inputSchemaFor(name: string): { safeParse: (value: unknown) => { success: boolean } } {
+  const tool = ALL_TOOLS.find((candidate) => candidate.name === name);
+  if (tool === undefined) throw new Error(`no tool named ${name}`);
+
+  let schema: unknown;
+  const server = {
+    registerTool: (_name: string, config: Record<string, unknown>) => {
+      schema = config['inputSchema'];
+    },
+  };
+  tool.register(server as never, { bridge: fakeBridge(SUCCESS).bridge, docs: stubDocs });
+  // Boundary cast: the registered schema is a Zod object by construction.
+  return schema as { safeParse: (value: unknown) => { success: boolean } };
+}
+
 /**
  * hs_api_search reads the bundled documentation from disk instead of talking
  * to Hammerspoon, so the bridge-shaped assertions below do not apply to it. It
@@ -91,9 +107,11 @@ describe('every tool', () => {
     const { bridge, calls } = fakeBridge(SUCCESS);
     const handler = handlerFor(name, { bridge, docs: stubDocs });
 
-    // Arguments that satisfy every schema in the set. expectRole is there for
-    // hs_ui_press, whose handler refuses to bridge a press that carries no
-    // expectation at all (#36).
+    // Arguments that satisfy every schema in the set. handlerFor bypasses
+    // schema validation, so nothing here is enforced - but the bag stays
+    // schema-valid (expectRole satisfies hs_ui_press's require-one-of
+    // refine, #36) so these tests keep passing if validation ever moves
+    // into the captured handler.
     await handler(
       {
         id: 1,
@@ -158,31 +176,12 @@ describe('every tool', () => {
 });
 
 describe('hs_ui_press expectation guard (#36)', () => {
-  /** The schema a tool advertises, captured off the stub registration. */
-  function schemaFor(name: string): { safeParse: (value: unknown) => { success: boolean } } {
-    const tool = ALL_TOOLS.find((candidate) => candidate.name === name);
-    if (tool === undefined) throw new Error(`no tool named ${name}`);
-    let captured: { safeParse: (value: unknown) => { success: boolean } } | undefined;
-    const server = {
-      registerTool: (
-        _name: string,
-        config: { inputSchema: { safeParse: (value: unknown) => { success: boolean } } },
-        _handler: unknown
-      ) => {
-        captured = config.inputSchema;
-      },
-    };
-    tool.register(server as never, { bridge: fakeBridge(SUCCESS).bridge, docs: stubDocs });
-    if (captured === undefined) throw new Error(`${name} did not register a schema`);
-    return captured;
-  }
-
   it('rejects a press carrying neither expectLabel nor expectRole at the schema', () => {
     // The refine fails validation before the handler runs, so an unchecked
     // press never reaches the machine. The Lua program repeats the check for
     // callers that bypass the schema; the integration suite exercises that
     // arm, since a fake bridge cannot run Lua.
-    const schema = schemaFor('hs_ui_press');
+    const schema = inputSchemaFor('hs_ui_press');
     expect(schema.safeParse({ path: '/1/2', app: 'Calculator' }).success).toBe(false);
     expect(schema.safeParse({ path: '/1/2', expectLabel: '7' }).success).toBe(true);
     expect(schema.safeParse({ path: '/1/2', expectRole: 'AXButton' }).success).toBe(true);
@@ -428,21 +427,6 @@ describe('unencodable results (#29)', () => {
 });
 
 describe('hs_open_url schema', () => {
-  function inputSchemaFor(name: string): { safeParse: (value: unknown) => { success: boolean } } {
-    const tool = ALL_TOOLS.find((candidate) => candidate.name === name);
-    if (tool === undefined) throw new Error(`no tool named ${name}`);
-
-    let schema: unknown;
-    const server = {
-      registerTool: (_name: string, config: Record<string, unknown>) => {
-        schema = config['inputSchema'];
-      },
-    };
-    tool.register(server as never, { bridge: fakeBridge(SUCCESS).bridge, docs: stubDocs });
-    // Boundary cast: the registered schema is a Zod object by construction.
-    return schema as { safeParse: (value: unknown) => { success: boolean } };
-  }
-
   it('rejects a URL without a scheme before any Lua runs', () => {
     const schema = inputSchemaFor('hs_open_url');
     expect(schema.safeParse({ url: 'not a url at all' }).success).toBe(false);

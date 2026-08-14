@@ -38,6 +38,16 @@ const CANONICAL_CHAIN = `local function labelOf(element)
     or attr(element, "AXPlaceholderValue")
 end`;
 
+/**
+ * Same contract, same treatment: an action hs_ui_inspect lists must be one
+ * hs_ui_press accepts, so the action reader is pinned like the label chain.
+ */
+const CANONICAL_ACTIONS = `local function actionsOf(element)
+  local ok, names = pcall(function() return element:actionNames() end)
+  if ok and type(names) == "table" and #names > 0 then return names end
+  return nil
+end`;
+
 async function collectTypeScriptFiles(directory: string): Promise<string[]> {
   const entries = await readdir(directory, { withFileTypes: true });
   const files = await Promise.all(
@@ -57,8 +67,20 @@ describe('the label-resolution fragment', () => {
       const contents = await readFile(join(SRC_ROOT, '..', relative), 'utf8');
       expect(contents).toContain(CANONICAL_FRAGMENT);
       expect(contents).toContain(CANONICAL_CHAIN);
+      expect(contents).toContain(CANONICAL_ACTIONS);
     }
   );
+
+  it('the action reader is never partially copied anywhere else in src', async () => {
+    const files = await collectTypeScriptFiles(SRC_ROOT);
+    const offenders: string[] = [];
+    for (const file of files) {
+      const contents = await readFile(file, 'utf8');
+      if (!contents.includes('actionNames')) continue;
+      if (!contents.includes(CANONICAL_ACTIONS)) offenders.push(file);
+    }
+    expect(offenders).toEqual([]);
+  });
 
   it('is never partially copied anywhere else in src', async () => {
     // A third divergent copy is how #31 happened. Any file touching any of

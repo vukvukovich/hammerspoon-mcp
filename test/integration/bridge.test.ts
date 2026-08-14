@@ -592,6 +592,26 @@ return true
   });
 
   /**
+   * The Lua-side guards, pinned against Hammerspoon itself so their coverage
+   * never depends on Calculator being closed (#36). runTool bypasses the
+   * schema refine exactly like a direct bridge caller, so the refusals below
+   * are the Lua program's own. Both are refusals: nothing gets pressed.
+   */
+  it('hs_ui_press Lua guards refuse without an expectation and on a dead path (#36)', async () => {
+    const unchecked = await runTool('hs_ui_press', { path: '/1', app: 'Hammerspoon' });
+    expect(unchecked.isError).toBe(true);
+    expect(unchecked.content[0]?.text).toContain('expectLabel');
+
+    const stale = await runTool('hs_ui_press', {
+      path: '/999/999',
+      app: 'Hammerspoon',
+      expectLabel: 'anything',
+    });
+    expect(stale.isError).toBe(true);
+    expect(stale.content[0]?.text).toContain('re-run hs_ui_inspect');
+  });
+
+  /**
    * Regression test for #27, the wrong-element press.
    *
    * Calculator is the target because every button is consequence-free, and

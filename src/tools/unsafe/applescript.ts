@@ -92,6 +92,17 @@ end
 
 local raw = type(descriptor) == "string" and descriptor or nil
 
+-- Every wrapper this program hands back must survive the codec's encode, or
+-- the codec tostrings the WRAPPER table and the caller gets a pointer it
+-- never created. So each candidate is probed before being returned, and the
+-- raw form gets the same treatment as the parsed result: it describes the
+-- same bytes that may just have refused to encode.
+local function encodable(wrapper)
+  local fine, encoded = pcall(hs.json.encode, wrapper)
+  if fine and encoded ~= nil then return wrapper end
+  return nil
+end
+
 -- "null()" is a script that returned nothing; "'msng'" is missing value,
 -- AppleScript's own null. Exact spellings, verified live. The exactness is a
 -- known shelf-life risk: if a future build renders the empty descriptor
@@ -99,15 +110,20 @@ local raw = type(descriptor) == "string" and descriptor or nil
 -- unrepresentable - extend this pair, do not loosen the nil-result check
 -- (a genuine date also has a nil result and MUST stay flagged).
 if result == nil and raw ~= nil and raw ~= "" and raw ~= "null()" and raw ~= "'msng'" then
-  return { ok = true, raw = raw }
+  return encodable({ ok = true, raw = raw }) or { ok = true, rawUnavailable = true }
 end
 
--- A result Lua holds but cannot encode (a binary string out of do shell
--- script) would make the codec tostring THIS wrapper table - a pointer the
--- caller never created. Prefer the raw source form, which is printable.
-local fine, encoded = pcall(hs.json.encode, { ok = true, result = result })
-if result ~= nil and (not fine or encoded == nil) then
-  return { ok = true, raw = (raw ~= nil and raw ~= "") and raw or "unrepresentable result" }
+if result ~= nil then
+  -- The probe costs one extra serialisation of the result, which is the
+  -- price of never shipping a wrapper pointer; action-only and null results
+  -- skip it entirely.
+  local plain = encodable({ ok = true, result = result })
+  if plain then return plain end
+  local viaRaw = (raw ~= nil and raw ~= "") and encodable({ ok = true, raw = raw }) or nil
+  if viaRaw then return viaRaw end
+  -- No representable form at all. Say exactly that, with no fabricated
+  -- stand-in value that could be mistaken for a genuine descriptor.
+  return { ok = true, rawUnavailable = true }
 end
 
 return { ok = true, result = result }
@@ -158,10 +174,21 @@ export function decodeNsStringEscapes(text: string): string {
 const RAW_RESULT_HINT =
   'AppleScript returned a value Hammerspoon could not turn into a Lua type, so only its raw source form is shown. Coerce it inside the script when you need the value, for example: return (current date) as string';
 
+// Distinct from RAW_RESULT_HINT because the diagnosis differs: here the value
+// existed but no readable form of it survived, and coercing to a plain type
+// is the only way to get anything out.
+const NO_RAW_HINT =
+  'The script succeeded, but its result could not be represented and no readable raw form was available either. If you need the value, coerce it to a plain type inside the script, for example: return (theResult as string)';
+
 function renderAppleScriptResult(value: unknown): CallToolResult {
-  const record = value as { raw?: unknown } | null;
-  if (record !== null && typeof record === 'object' && typeof record.raw === 'string') {
-    return unrepresentableResult(record.raw, RAW_RESULT_HINT);
+  const record = value as { raw?: unknown; rawUnavailable?: unknown } | null;
+  if (record !== null && typeof record === 'object') {
+    if (typeof record.raw === 'string') {
+      return unrepresentableResult(record.raw, RAW_RESULT_HINT);
+    }
+    if (record.rawUnavailable === true) {
+      return unrepresentableResult(null, NO_RAW_HINT);
+    }
   }
   return jsonResult(value);
 }
