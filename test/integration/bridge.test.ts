@@ -126,8 +126,16 @@ async function waitForResponsive(attempts = 20): Promise<void> {
  * Hammerspoon API name, which no amount of unit testing against a fake
  * subprocess can find.
  */
+/** What every tool handler resolves to, typed once so call sites need no casts (#33). */
+type ToolResult = { isError?: boolean; content: { text: string }[] };
+
+/** Parses the JSON payload a tool result carries in its first text block. */
+function payloadOf<T>(result: ToolResult): T {
+  return JSON.parse(result.content[0]?.text ?? '{}') as T;
+}
+
 describe.skipIf(!available)('tool Lua executes against real Hammerspoon', () => {
-  const runTool = async (name: string, args: Record<string, unknown> = {}) => {
+  const runTool = async (name: string, args: Record<string, unknown> = {}): Promise<ToolResult> => {
     const tool = ALL_TOOLS.find((candidate) => candidate.name === name);
     expect(tool, `tool ${name} should exist`).toBeDefined();
 
@@ -143,7 +151,7 @@ describe.skipIf(!available)('tool Lua executes against real Hammerspoon', () => 
     };
     tool?.register(fakeServer as never, { bridge, docs: new DocsIndex() });
 
-    const handler = captured as (a: unknown, c: unknown) => Promise<{ isError?: boolean }>;
+    const handler = captured as (a: unknown, c: unknown) => Promise<ToolResult>;
     return handler(args, {});
   };
 
@@ -169,10 +177,7 @@ describe.skipIf(!available)('tool Lua executes against real Hammerspoon', () => 
     ['hs_default_browser', {}],
     ['hs_settings', { action: 'list' }],
   ])('%s succeeds', async (name, args) => {
-    const result = (await runTool(name, args)) as unknown as {
-      isError?: boolean;
-      content?: { text?: string }[];
-    };
+    const result = await runTool(name, args);
     // The failure text rides along so a red run says what went wrong instead
     // of only "expected true not to be true".
     expect(result.isError, result.content?.[0]?.text ?? '').not.toBe(true);
@@ -183,11 +188,11 @@ describe.skipIf(!available)('tool Lua executes against real Hammerspoon', () => 
   // without an accessibility tree (or one that vanished) made this fail only
   // inside the suite and never standalone.
   it('hs_ui_inspect reads a named application', async () => {
-    const result = (await runTool('hs_ui_inspect', {
+    const result = await runTool('hs_ui_inspect', {
       app: 'Hammerspoon',
       depth: 2,
       limit: 40,
-    })) as unknown as { isError?: boolean; content: { text: string }[] };
+    });
 
     expect(result.isError).not.toBe(true);
     const payload = JSON.parse(result.content[0]?.text ?? '{}') as {
@@ -203,10 +208,7 @@ describe.skipIf(!available)('tool Lua executes against real Hammerspoon', () => 
   // Read-modify-restore, so the suite leaves the machine as it found it.
   it('hs_audio_volume round-trips a change', async () => {
     const read = async (): Promise<{ volume: number }> =>
-      JSON.parse(
-        ((await runTool('hs_audio_volume', {})) as unknown as { content: { text: string }[] })
-          .content[0]?.text ?? '{}'
-      ) as { volume: number };
+      payloadOf<{ volume: number }>(await runTool('hs_audio_volume', {}));
 
     const before = await read();
     try {
@@ -222,12 +224,8 @@ describe.skipIf(!available)('tool Lua executes against real Hammerspoon', () => 
   // could overwrite something the user's own config depends on.
   it('hs_settings round-trips and stays inside its namespace', async () => {
     const read = async (): Promise<string> =>
-      (
-        (await runTool('hs_settings', {
-          action: 'get',
-          key: 'integration-probe',
-        })) as unknown as { content: { text: string }[] }
-      ).content[0]?.text ?? '';
+      (await runTool('hs_settings', { action: 'get', key: 'integration-probe' })).content[0]
+        ?.text ?? '';
 
     try {
       await runTool('hs_settings', { action: 'set', key: 'integration-probe', value: 'v1' });
@@ -238,13 +236,9 @@ describe.skipIf(!available)('tool Lua executes against real Hammerspoon', () => 
     expect(await read()).not.toContain('v1');
 
     // The listing must never surface a key this tool did not write.
-    const listed =
-      (
-        (await runTool('hs_settings', { action: 'list' })) as unknown as {
-          content: { text: string }[];
-        }
-      ).content[0]?.text ?? '{}';
-    const parsed = JSON.parse(listed) as { settings: { key: string }[] };
+    const parsed = payloadOf<{ settings: { key: string }[] }>(
+      await runTool('hs_settings', { action: 'list' })
+    );
     for (const entry of parsed.settings) {
       expect(entry.key).not.toContain('hsmcp.');
     }
@@ -260,9 +254,7 @@ describe.skipIf(!available)('tool Lua executes against real Hammerspoon', () => 
   it('hs_run_shortcut starts a real shortcut without erroring', async (ctx) => {
     const safeName = process.env['HS_MCP_TEST_SHORTCUT'] ?? 'Open Finder file manager';
 
-    const listed = (await runTool('hs_list_shortcuts', {})) as unknown as {
-      content: { text: string }[];
-    };
+    const listed = await runTool('hs_list_shortcuts', {});
     const parsed = JSON.parse(listed.content[0]?.text ?? '{}') as {
       shortcuts?: { name: string }[];
     };
@@ -270,10 +262,7 @@ describe.skipIf(!available)('tool Lua executes against real Hammerspoon', () => 
     if (!names.includes(safeName)) ctx.skip();
 
     try {
-      const result = (await runTool('hs_run_shortcut', { name: safeName })) as unknown as {
-        isError?: boolean;
-        content: { text: string }[];
-      };
+      const result = await runTool('hs_run_shortcut', { name: safeName });
       expect(result.isError).not.toBe(true);
       expect(result.content[0]?.text).toContain('started');
     } finally {
@@ -285,9 +274,9 @@ describe.skipIf(!available)('tool Lua executes against real Hammerspoon', () => 
   });
 
   it('hs_run_shortcut lists the alternatives when nothing matches', async () => {
-    const result = (await runTool('hs_run_shortcut', {
+    const result = await runTool('hs_run_shortcut', {
       name: 'no-such-shortcut-xyz',
-    })) as unknown as { isError?: boolean; content: { text: string }[] };
+    });
     expect(result.isError).toBe(true);
     expect(result.content[0]?.text).toContain('Available');
   });
@@ -315,11 +304,11 @@ return { id = w:id(), frame = { x = f.x, y = f.y, w = f.w, h = f.h } }
     const original = focused.value as { id: number; frame: Record<string, number> };
 
     try {
-      const result = (await runTool('hs_move_window', {
+      const result = await runTool('hs_move_window', {
         id: original.id,
         x: -5000,
         y: -5000,
-      })) as unknown as { isError?: boolean; content: { text: string }[] };
+      });
       expect(result.isError).not.toBe(true);
 
       const payload = JSON.parse(result.content[0]?.text ?? '{}') as {
@@ -351,28 +340,28 @@ return true
   });
 
   it('hs_open_url errors for a scheme nothing handles', async () => {
-    const result = (await runTool('hs_open_url', {
+    const result = await runTool('hs_open_url', {
       url: 'nosuchscheme00://probe',
-    })) as unknown as { isError?: boolean; content: { text: string }[] };
+    });
     expect(result.isError).toBe(true);
     expect(result.content[0]?.text).toContain('nothing on this Mac handles');
   });
 
   it('hs_speak rejects a nonexistent voice instead of speaking with another', async () => {
-    const result = (await runTool('hs_speak', {
+    const result = await runTool('hs_speak', {
       text: 'this must never be spoken',
       voice: 'DefinitelyNotAVoice',
-    })) as unknown as { isError?: boolean; content: { text: string }[] };
+    });
     expect(result.isError).toBe(true);
     expect(result.content[0]?.text).toContain('no voice named');
   });
 
   it('hs_speak reports the full identifier of the voice in use', async () => {
-    const result = (await runTool('hs_speak', {
+    const result = await runTool('hs_speak', {
       text: 'test',
       voice: 'Daniel',
       rate: 400,
-    })) as unknown as { isError?: boolean; content: { text: string }[] };
+    });
     expect(result.isError).not.toBe(true);
     const payload = JSON.parse(result.content[0]?.text ?? '{}') as { voice: string };
     expect(payload.voice.toLowerCase()).toContain('daniel');
@@ -382,20 +371,20 @@ return true
   });
 
   it('hs_speak refuses a name shared by many voices and lists the candidates', async (ctx) => {
-    const result = (await runTool('hs_speak', {
+    const result = await runTool('hs_speak', {
       text: 'this must never be spoken',
       voice: 'Eddy',
-    })) as unknown as { isError?: boolean; content: { text: string }[] };
+    });
     // Machines without the Eloquence voice pack have no duplicate Eddys.
     if (result.isError !== true) ctx.skip();
     expect(result.content[0]?.text).toContain('com.apple.eloquence');
   });
 
   it('hs_notification is honest about unverifiable delivery', async () => {
-    const result = (await runTool('hs_notification', {
+    const result = await runTool('hs_notification', {
       title: 'hammerspoon-mcp integration test',
       withdrawAfter: 5,
-    })) as unknown as { isError?: boolean; content: { text: string }[] };
+    });
     expect(result.isError).not.toBe(true);
     const payload = JSON.parse(result.content[0]?.text ?? '{}') as {
       posted: boolean;
@@ -413,9 +402,7 @@ return true
    * machine with a single desktop.
    */
   it('hs_goto_space actually lands on the requested desktop', async (ctx) => {
-    const listed = (await runTool('hs_list_spaces', {})) as unknown as {
-      content: { text: string }[];
-    };
+    const listed = await runTool('hs_list_spaces', {});
     const spaces = JSON.parse(listed.content[0]?.text ?? '[]') as {
       id: number;
       type: string;
@@ -427,10 +414,7 @@ return true
     if (!current || !other) return;
 
     try {
-      const result = (await runTool('hs_goto_space', { id: other.id })) as unknown as {
-        isError?: boolean;
-        content: { text: string }[];
-      };
+      const result = await runTool('hs_goto_space', { id: other.id });
       expect(result.isError).not.toBe(true);
       const payload = JSON.parse(result.content[0]?.text ?? '{}') as { arrived: boolean };
       expect(payload.arrived).toBe(true);
@@ -446,9 +430,7 @@ return true
   });
 
   it('hs_goto_space recognises the space it is already on', async () => {
-    const listed = (await runTool('hs_list_spaces', {})) as unknown as {
-      content: { text: string }[];
-    };
+    const listed = await runTool('hs_list_spaces', {});
     const spaces = JSON.parse(listed.content[0]?.text ?? '[]') as {
       id: number;
       isCurrent: boolean;
@@ -457,17 +439,15 @@ return true
     expect(current).toBeDefined();
     if (!current) return;
 
-    const result = (await runTool('hs_goto_space', {
+    const result = await runTool('hs_goto_space', {
       id: current.id,
-    })) as unknown as { isError?: boolean; content: { text: string }[] };
+    });
     expect(result.isError).not.toBe(true);
     expect(result.content[0]?.text).toContain('alreadyThere');
   });
 
   it('hs_list_voices distinguishes same-named voices by language and id (#18)', async () => {
-    const result = (await runTool('hs_list_voices', {})) as unknown as {
-      content: { text: string }[];
-    };
+    const result = await runTool('hs_list_voices', {});
     const payload = JSON.parse(result.content[0]?.text ?? '{}') as {
       voices: { name: string; id: string; language?: string }[];
     };
@@ -485,9 +465,7 @@ return true
   });
 
   it('hs_wifi never claims a scan the radio could not have run (#18)', async () => {
-    const result = (await runTool('hs_wifi', {})) as unknown as {
-      content: { text: string }[];
-    };
+    const result = await runTool('hs_wifi', {});
     const payload = JSON.parse(result.content[0]?.text ?? '{}') as {
       radio: string;
       scanned: boolean;
@@ -503,9 +481,7 @@ return true
   });
 
   it('hs_list_apps marks exactly one application frontmost (#18)', async () => {
-    const result = (await runTool('hs_list_apps', {})) as unknown as {
-      content: { text: string }[];
-    };
+    const result = await runTool('hs_list_apps', {});
     const apps = JSON.parse(result.content[0]?.text ?? '[]') as { isFrontmost: boolean }[];
     expect(apps.filter((app) => app.isFrontmost)).toHaveLength(1);
   });
@@ -513,18 +489,16 @@ return true
   // Chrome specifically, because Chrome keeps control names in AXDescription
   // behind an empty AXTitle, which is the case the label fallback missed.
   it('hs_ui_inspect labels Chrome controls (#18)', async (ctx) => {
-    const apps = (await runTool('hs_list_apps', { query: 'chrome' })) as unknown as {
-      content: { text: string }[];
-    };
+    const apps = await runTool('hs_list_apps', { query: 'chrome' });
     const found = JSON.parse(apps.content[0]?.text ?? '[]') as { name: string }[];
     if (!found.some((app) => app.name === 'Google Chrome')) ctx.skip();
 
-    const result = (await runTool('hs_ui_inspect', {
+    const result = await runTool('hs_ui_inspect', {
       app: 'Google Chrome',
       role: 'button',
       depth: 8,
       limit: 300,
-    })) as unknown as { isError?: boolean; content: { text: string }[] };
+    });
     expect(result.isError).not.toBe(true);
 
     const text = result.content[0]?.text ?? '{}';
@@ -533,18 +507,16 @@ return true
   });
 
   it('hs_settings says whether a key existed (#18)', async () => {
-    const missing = (await runTool('hs_settings', {
+    const missing = await runTool('hs_settings', {
       action: 'get',
       key: 'never-written-probe',
-    })) as unknown as { content: { text: string }[] };
+    });
     const payload = JSON.parse(missing.content[0]?.text ?? '{}') as { found: boolean };
     expect(payload.found).toBe(false);
   });
 
   it('hs_music_status reports readable playback states (#18)', async () => {
-    const result = (await runTool('hs_music_status', {})) as unknown as {
-      content: { text: string }[];
-    };
+    const result = await runTool('hs_music_status', {});
     const payload = JSON.parse(result.content[0]?.text ?? '{}') as Record<
       string,
       { running: boolean; state?: string }
@@ -596,12 +568,10 @@ return { id = w:id(), frame = { x = f.x, y = f.y, w = f.w, h = f.h } }
       });
       expect(applied.isError).not.toBe(true);
 
-      const text =
-        (applied as unknown as { content?: { text?: string }[] }).content?.[0]?.text ?? '{}';
-      const payload = JSON.parse(text) as {
+      const payload = payloadOf<{
         screenFrame: { x: number; y: number; w: number; h: number };
         frame: { x: number; y: number; w: number; h: number };
-      };
+      }>(applied);
 
       const predicted = applyFraction(LAYOUT_PRESETS['left-half'], payload.screenFrame);
       // A window manager rounds to whole pixels and some apps refuse sizes
@@ -629,89 +599,108 @@ return true
    * into its keypad row as soon as the display has input, shifting every
    * later sibling index by one. So a path captured before a press points at
    * a different button after it, which is precisely the situation
-   * expectLabel exists to catch. The app is launched, driven, and quit here.
+   * expectLabel exists to catch.
+   *
+   * Hygiene (#33): a Calculator the user already has open is their session,
+   * not a fixture. The test skips rather than typing into it, and kills only
+   * the instance it launched itself. Labels and paths come from
+   * hs_ui_inspect through the real tool surface, so this exercises the exact
+   * inspect-to-press contract, re-inspecting after the press that reshapes
+   * the tree instead of trusting pre-press indexes.
    */
-  it('hs_ui_press refuses a path whose element changed under it (#27)', async () => {
-    const keypadChildren = lua`
-local app = hs.application.get("Calculator")
-if not app then error("Calculator is not running", 0) end
-local node = hs.axuielement.applicationElement(app)
-for _, index in ipairs({ 1, 1, 1, 1, 1 }) do
-  local children = node:attributeValue("AXChildren")
-  if type(children) ~= "table" or not children[index] then error("keypad not found", 0) end
-  node = children[index]
-end
-local out = {}
-for index, child in ipairs(node:attributeValue("AXChildren") or {}) do
-  out[#out + 1] = {
-    index = index,
-    label = child:attributeValue("AXTitle") or child:attributeValue("AXDescription") or "",
-  }
-end
-return out
-`;
+  it('hs_ui_press refuses a path whose element changed under it (#27)', async (ctx) => {
+    const wasRunning = await bridge.run(
+      lua`return { running = hs.application.get("Calculator") ~= nil }`
+    );
+    expect(wasRunning.ok).toBe(true);
+    if (!wasRunning.ok) return;
+    if ((wasRunning.value as { running: boolean }).running) {
+      ctx.skip(); // the user's live Calculator is not a test fixture
+    }
 
-    await bridge.run(lua`hs.application.launchOrFocus("Calculator") return true`);
-    await new Promise((resolve) => setTimeout(resolve, 2500));
+    type InspectNode = { path?: string; role?: string; label?: string; children?: InspectNode[] };
+    const buttonsByLabel = async (): Promise<Map<string, InspectNode>> => {
+      const inspected = await runTool('hs_ui_inspect', {
+        app: 'Calculator',
+        role: 'AXButton',
+        depth: 8,
+        limit: 500,
+      });
+      const found = new Map<string, InspectNode>();
+      if (inspected.isError === true) return found;
+      const walk = (node: InspectNode | undefined): void => {
+        if (!node) return;
+        if (node.role === 'AXButton' && node.label && node.path) found.set(node.label, node);
+        for (const child of node.children ?? []) walk(child);
+      };
+      walk(payloadOf<{ tree?: InspectNode }>(inspected).tree);
+      return found;
+    };
 
     try {
-      const before = await bridge.run(keypadChildren);
-      expect(before.ok).toBe(true);
-      if (!before.ok) return;
+      await bridge.run(lua`hs.application.launchOrFocus("Calculator") return true`);
+      // Poll for the keypad instead of a fixed sleep: a warm launch is ready
+      // well under a second, and no fixed number is long enough for a loaded
+      // cold start (#33).
+      let buttons = new Map<string, InspectNode>();
+      for (let attempt = 0; attempt < 40 && !buttons.has('7'); attempt += 1) {
+        await new Promise((resolve) => setTimeout(resolve, 200));
+        buttons = await buttonsByLabel();
+      }
+      // Some Calculator versions label their keys differently; a skip shows
+      // in the report, where a silent early return would count as a pass and
+      // pin nothing (#33).
+      if (!buttons.has('7') || !buttons.has('5')) ctx.skip();
 
-      const keys = before.value as { index: number; label: string }[];
-      const five = keys.find((key) => key.label === '5');
-      const seven = keys.find((key) => key.label === '7');
-      // Some Calculator versions expose a different tree; skip rather than
-      // assert on a layout this machine does not have.
-      if (!five || !seven) return;
-
-      const pathTo = (index: number): string => `/1/1/1/1/1/${String(index)}`;
-
-      // A matching expectation acts normally.
-      const pressed = (await runTool('hs_ui_press', {
-        path: pathTo(seven.index),
+      // A matching expectation acts normally, and says which check ran.
+      const pressed = await runTool('hs_ui_press', {
+        path: buttons.get('7')?.path ?? '',
         app: 'Calculator',
         expectLabel: '7',
-      })) as unknown as { isError?: boolean; content: { text: string }[] };
-      expect(pressed.isError).not.toBe(true);
-      expect(JSON.parse(pressed.content[0]?.text ?? '{}')).toMatchObject({
-        label: '7',
-        verified: true,
       });
+      expect(pressed.isError, pressed.content[0]?.text ?? '').not.toBe(true);
+      expect(payloadOf(pressed)).toMatchObject({ label: '7', verified: 'label' });
+
+      // The press put input into the display, which is exactly the state
+      // that reshapes the keypad. Fresh paths from a fresh inspection; the
+      // refusals below press nothing, so no further reshape happens.
+      buttons = await buttonsByLabel();
+      const seven = buttons.get('7');
+      const five = buttons.get('5');
+      if (!seven || !five) ctx.skip();
+      if (!seven || !five) return;
 
       // The guard itself, asserted deterministically: aiming 5's expectation
-      // at 7's path is exactly the state a stale path produces. The real
-      // shift is not reproducible on demand (it needs a pending operation on
-      // the display, so a fresh launch often will not do it), and a
-      // regression test must not depend on Calculator's mood.
-      const mismatched = (await runTool('hs_ui_press', {
-        path: pathTo(seven.index),
+      // at 7's path is exactly the state a stale path produces.
+      const mismatched = await runTool('hs_ui_press', {
+        path: seven.path ?? '',
         app: 'Calculator',
         expectLabel: '5',
-      })) as unknown as { isError?: boolean; content: { text: string }[] };
+      });
       expect(mismatched.isError).toBe(true);
       expect(mismatched.content[0]?.text).toContain('refusing to act');
       expect(mismatched.content[0]?.text).toContain("found '7'");
 
       // Role mismatches are refused the same way, for unlabelled elements.
-      const wrongRole = (await runTool('hs_ui_press', {
-        path: pathTo(five.index),
+      const wrongRole = await runTool('hs_ui_press', {
+        path: five.path ?? '',
         app: 'Calculator',
         expectRole: 'AXTextField',
-      })) as unknown as { isError?: boolean; content: { text: string }[] };
+      });
       expect(wrongRole.isError).toBe(true);
       expect(wrongRole.content[0]?.text).toContain('refusing to act');
 
-      // An unverified press still works, but says so, so a caller can tell a
-      // checked press from an unchecked one.
-      const unverified = (await runTool('hs_ui_press', {
-        path: pathTo(five.index),
+      // A press carrying no expectation at all is refused by the handler
+      // before any Lua runs (#36).
+      const unchecked = await runTool('hs_ui_press', {
+        path: five.path ?? '',
         app: 'Calculator',
-      })) as unknown as { isError?: boolean; content: { text: string }[] };
-      expect(unverified.isError).not.toBe(true);
-      expect(JSON.parse(unverified.content[0]?.text ?? '{}')).toMatchObject({ verified: false });
+      });
+      expect(unchecked.isError).toBe(true);
+      expect(unchecked.content[0]?.text).toContain('expectLabel');
     } finally {
+      // Kill only what this test launched: the wasRunning skip above means
+      // reaching here implies the instance is ours.
       await bridge.run(lua`
 local app = hs.application.get("Calculator")
 if app then app:kill() end
@@ -723,18 +712,18 @@ return true
   // #30: pins the documented truncation, so a future change to the codec's
   // wrapper that silently altered it would fail here rather than in the wild.
   it('hs_eval returns only the first value, as documented (#30)', async () => {
-    const several = (await runTool('hs_eval', {
+    const several = await runTool('hs_eval', {
       code: 'return 1, 2, 3',
       timeoutMs: 5000,
-    })) as unknown as { isError?: boolean; content: { text: string }[] };
+    });
     expect(several.isError).not.toBe(true);
     expect(JSON.parse(several.content[0]?.text ?? 'null')).toBe(1);
 
     // And the workaround the description prescribes returns everything.
-    const wrapped = (await runTool('hs_eval', {
+    const wrapped = await runTool('hs_eval', {
       code: 'return { first = 1, second = 2, third = 3 }',
       timeoutMs: 5000,
-    })) as unknown as { content: { text: string }[] };
+    });
     expect(JSON.parse(wrapped.content[0]?.text ?? '{}')).toEqual({
       first: 1,
       second: 2,
@@ -745,42 +734,79 @@ return true
   // #28: every failure used to be a bare "AppleScript failed", because the
   // error dictionary is the THIRD return value and the code read the second.
   it('hs_applescript reports the real error message and number (#28)', async () => {
-    const failure = (await runTool('hs_applescript', {
+    const failure = await runTool('hs_applescript', {
       script: 'return undefinedVariable123',
-    })) as unknown as { isError?: boolean; content: { text: string }[] };
+    });
 
     expect(failure.isError).toBe(true);
     const text = failure.content[0]?.text ?? '';
-    expect(text).toContain('undefinedVariable123 is not defined');
+    // The variable name and the error number, but not the sentence around
+    // them: NSLocalizedDescription is localised, and this must pass on a
+    // non-English macOS too (#33).
+    expect(text).toContain('undefinedVariable123');
     expect(text).toContain('-2753');
   });
 
   it('hs_applescript flags a result with no Lua equivalent (#28)', async () => {
-    const unrepresentable = (await runTool('hs_applescript', {
+    const unrepresentable = await runTool('hs_applescript', {
       script: 'return current date',
-    })) as unknown as { isError?: boolean; content: { text: string }[] };
+    });
     expect(unrepresentable.isError).not.toBe(true);
-    const payload = JSON.parse(unrepresentable.content[0]?.text ?? '{}') as {
-      representable: boolean;
-      raw?: string;
-      hint?: string;
-    };
+    const payload = payloadOf<{ encodable: boolean; value?: string; hint?: string }>(
+      unrepresentable
+    );
     // A date cannot become a Lua value, so it must arrive as its raw form
-    // with the flag set, never as a bare success carrying nothing.
-    expect(payload.representable).toBe(false);
-    expect(payload.raw).toBeTruthy();
+    // with the shared unrepresentable shape (#35), never as a bare success
+    // carrying nothing.
+    expect(payload.encodable).toBe(false);
+    expect(payload.value).toBeTruthy();
     expect(payload.hint).toContain('Coerce it');
 
     // And the coercion the hint suggests genuinely works.
-    const coerced = (await runTool('hs_applescript', {
+    const coerced = await runTool('hs_applescript', {
       script: 'return (current date) as string',
-    })) as unknown as { content: { text: string }[] };
-    const coercedPayload = JSON.parse(coerced.content[0]?.text ?? '{}') as {
-      representable: boolean;
-      result: string;
-    };
-    expect(coercedPayload.representable).toBe(true);
+    });
+    const coercedPayload = payloadOf<{ result: string }>(coerced);
     expect(typeof coercedPayload.result).toBe('string');
+  });
+
+  // #32: null is an answer, not a failure to represent. AppleScript's own
+  // null and a script that returns nothing are both plain successes.
+  it.each([
+    ['missing value', 'return missing value'],
+    ['no return value', 'delay 0'],
+  ])('hs_applescript reports %s as a plain success (#32)', async (_label, script) => {
+    const result = await runTool('hs_applescript', { script });
+    expect(result.isError, result.content[0]?.text ?? '').not.toBe(true);
+    const payload = payloadOf<Record<string, unknown>>(result);
+    expect(payload['ok']).toBe(true);
+    expect(payload['encodable']).toBeUndefined();
+    expect(payload['result']).toBeUndefined();
+  });
+
+  it('hs_applescript decodes non-ASCII in error messages (#32)', async () => {
+    const failure = await runTool('hs_applescript', {
+      script: 'error "can’t do 😀 that" number -1728',
+    });
+    expect(failure.isError).toBe(true);
+    const text = failure.content[0]?.text ?? '';
+    // The smart quote is a BMP escape and the emoji a surrogate pair on the
+    // wire; both must arrive as characters, not escapes or mojibake.
+    expect(text).toContain('can’t do 😀 that');
+    expect(text).toContain('-1728');
+  });
+
+  // #34: a throwing __tostring used to escape the codec's fallback pcall,
+  // print no marker line, and surface as a baffling ProtocolError.
+  it('hs_eval survives a value whose __tostring throws (#34)', async () => {
+    const result = await runTool('hs_eval', {
+      code: 'return setmetatable({ f = function() end }, { __tostring = function() error("boom") end })',
+      timeoutMs: 5000,
+    });
+    expect(result.isError, result.content[0]?.text ?? '').not.toBe(true);
+    const payload = payloadOf<{ encodable?: boolean; value?: string }>(result);
+    expect(payload.encodable).toBe(false);
+    expect(payload.value).toContain('tostring');
   });
 
   it('hs_eval compiles supplied code with load instead of splicing it', async () => {
