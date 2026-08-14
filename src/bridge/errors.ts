@@ -25,7 +25,13 @@ export type BridgeError = {
 };
 
 export type BridgeResult<TValue> =
-  | { readonly ok: true; readonly value: TValue }
+  /**
+   * `unencodable` marks a value Lua could not represent as JSON (a cyclic or
+   * mixed key/array table, a userdata handle), where `value` is only its
+   * `tostring` form. Absent means the value is genuine. It is optional rather
+   * than always present so that a plain success stays a two-field object.
+   */
+  | { readonly ok: true; readonly value: TValue; readonly unencodable?: true }
   | { readonly ok: false; readonly error: BridgeError };
 
 const SETUP_HINT =

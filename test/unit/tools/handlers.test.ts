@@ -334,6 +334,38 @@ describe('read-back after acting (#17)', () => {
   });
 });
 
+describe('unencodable results (#29)', () => {
+  it('labels a value Lua could not encode instead of passing off its pointer', async () => {
+    const { bridge } = fakeBridge({
+      ok: true,
+      value: 'table: 0x600002a1c000',
+      unencodable: true,
+    });
+    const result = await handlerFor('hs_eval', { bridge, docs: stubDocs })(
+      { code: 'local t = {} t.self = t return t', timeoutMs: 1000 },
+      {}
+    );
+
+    const payload = JSON.parse(result.content[0]?.text ?? '{}') as {
+      value: string;
+      encodable: boolean;
+      hint: string;
+    };
+    expect(payload.encodable).toBe(false);
+    expect(payload.value).toBe('table: 0x600002a1c000');
+    expect(payload.hint).toContain('Return specific fields');
+  });
+
+  it('leaves a genuine string that merely looks like a pointer alone', async () => {
+    const { bridge } = fakeBridge({ ok: true, value: 'table: 0x600002a1c000' });
+    const result = await handlerFor('hs_eval', { bridge, docs: stubDocs })(
+      { code: 'return "table: 0x600002a1c000"', timeoutMs: 1000 },
+      {}
+    );
+    expect(JSON.parse(result.content[0]?.text ?? '""')).toBe('table: 0x600002a1c000');
+  });
+});
+
 describe('hs_open_url schema', () => {
   function inputSchemaFor(name: string): { safeParse: (value: unknown) => { success: boolean } } {
     const tool = ALL_TOOLS.find((candidate) => candidate.name === name);

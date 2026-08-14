@@ -256,4 +256,23 @@ describe('envelopeToResult', () => {
     expect(result.error.kind).toBe('LuaError');
     expect(result.error.message).toBe('no window');
   });
+
+  // The flag used to be dropped here, so a caller could not tell a value Lua
+  // failed to encode from a genuine string holding the same text (#29).
+  it('carries the unencodable flag through', () => {
+    const result = envelopeToResult(
+      { ok: true, value: 'table: 0x600002a1c000', unencodable: true },
+      luaError
+    );
+    expect(result).toEqual({ ok: true, value: 'table: 0x600002a1c000', unencodable: true });
+  });
+
+  it('leaves the flag off an ordinary success, so a plain result stays plain', () => {
+    const result = envelopeToResult(
+      { ok: true, value: 'table: 0x600002a1c000', unencodable: false },
+      luaError
+    );
+    expect(result).toEqual({ ok: true, value: 'table: 0x600002a1c000' });
+    expect('unencodable' in result).toBe(false);
+  });
 });

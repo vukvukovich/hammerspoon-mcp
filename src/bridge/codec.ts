@@ -191,6 +191,12 @@ export function envelopeToResult(
   envelope: LuaEnvelope,
   toLuaError: (message: string) => BridgeError
 ): BridgeResult<unknown> {
-  if (envelope.ok) return { ok: true, value: envelope.value };
+  if (envelope.ok) {
+    // Only set when true: a plain success must stay { ok, value }, which is
+    // what callers and tests compare against.
+    return envelope.unencodable
+      ? { ok: true, value: envelope.value, unencodable: true }
+      : { ok: true, value: envelope.value };
+  }
   return { ok: false, error: toLuaError(envelope.err) };
 }

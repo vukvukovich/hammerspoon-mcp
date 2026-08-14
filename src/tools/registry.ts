@@ -103,6 +103,20 @@ export function fromBridge(
   result: BridgeResult<unknown>,
   render: (value: unknown) => CallToolResult = jsonResult
 ): CallToolResult {
-  if (result.ok) return render(result.value);
+  if (result.ok) {
+    // A value Lua could not encode arrives as its tostring form, which is
+    // indistinguishable from a genuine string ("table: 0x...") unless it is
+    // labelled. Saying so beats handing back a pointer as though it were the
+    // answer (#29). The tool's own renderer is bypassed here on purpose: it
+    // was written to shape a real value, and there is not one.
+    if (result.unencodable === true) {
+      return jsonResult({
+        value: result.value,
+        encodable: false,
+        hint: 'Lua could not represent this value as JSON, so only its tostring form is shown. Cyclic tables, tables mixing array and named keys, functions, and userdata handles all do this. Return specific fields instead, for example the id or name you need.',
+      });
+    }
+    return render(result.value);
+  }
   return errorResult(formatBridgeError(result.error));
 }
