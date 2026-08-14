@@ -265,8 +265,9 @@ one bridge, so in practice that is once per process.
 
 ## The result protocol
 
-Every tool's Lua produces exactly one JSON line on stdout. `buildProgram` in
-`src/bridge/codec.ts` wraps the static body to guarantee it:
+Every tool's Lua produces exactly one marked JSON line on stdout. `buildProgram`
+in `src/bridge/codec.ts` wraps the static body to guarantee it (compressed here;
+the real wrapper is in `buildProgram`):
 
 ```lua
 local ARGS = hs.json.decode(hs.base64.decode("<base64>")) or {}
@@ -274,21 +275,32 @@ local __ok, __res = pcall(function()
   -- static tool body, reads ARGS.*
   return { count = 3 }
 end)
-if not __ok then
-  return hs.json.encode({ ok = false, err = tostring(__res) })
+local function __stringify(value, fallback)
+  -- tostring under pcall, then a probe encode of the text. A __tostring
+  -- metamethod can throw (#34), and one returning invalid UTF-8 would pass a
+  -- type check and then kill the fallback encode below.
+  ...
 end
-local __encoded, __json = pcall(hs.json.encode, { ok = true, value = __res })
-if __encoded then return __json end
-return hs.json.encode({ ok = true, value = tostring(__res), unencodable = true })
+local __payload
+if __ok then
+  local __fine, __encoded = pcall(hs.json.encode, { ok = true, value = __res })
+  if __fine and __encoded ~= nil then
+    __payload = __encoded
+  else
+    __payload = encode({ ok = true, value = __stringify(__res, ...), unencodable = true })
+  end
+else
+  __payload = encode({ ok = false, err = __stringify(__res, ...) })
+end
+return "<per-call marker>" .. __payload
 ```
 
-The program `return`s the JSON string rather than printing it. The `hs` CLI
-prints whatever the program returns, so this stays one line and one line only.
-
-The locals are `__` prefixed so a tool body can declare `ok`, `res`, or `json`
+The program `return`s the string rather than printing it. The `hs` CLI prints
+whatever the program returns, so this stays one line and one line only. The
+locals are `__` prefixed so a tool body can declare `ok`, `res`, or `payload`
 without colliding with the wrapper.
 
-So the wire format is one of three shapes:
+The wire format is one of three shapes:
 
 ```json
 { "ok": true, "value": { "count": 3 } }
@@ -296,35 +308,46 @@ So the wire format is one of three shapes:
 { "ok": true, "value": "hs.window: Safari", "unencodable": true }
 ```
 
-The third one exists because some Hammerspoon values cannot be JSON-encoded at
-all. A cyclic table, or a userdata handle, makes `hs.json.encode` throw. Losing
-the whole call to that is worse than handing back `tostring(value)` and a flag
-saying so, so the encode itself runs under a second `pcall`.
+The third one exists because some Hammerspoon values cannot be JSON-encoded.
+Two subtleties in how it is produced, both learned the hard way:
 
-`pcall` is what keeps a Lua runtime error from becoming a process-level failure
-with no diagnosis. A crashed tool still returns a structured `err` the agent can
-read and act on.
+- `hs.json.encode` does not throw on an unencodable value, it **returns nil**,
+  so a `pcall` around it reports success with nothing in hand. Detection is the
+  nil test, not the pcall (#29).
+- The `tostring` fallback runs under its own `pcall` and its output is probed
+  for encodability, because a value whose `__tostring` throws, or returns
+  invalid UTF-8, would otherwise destroy the envelope at exactly the moment
+  the fallback was supposed to save it (#34).
 
-### Why the parser takes the last JSON-parseable line
+On the TypeScript side the flag is normalised once, in `readEnvelope`
+(present-and-true or absent, #37), and surfaces to the caller as the shared
+unrepresentable shape: `{ value, encodable: false, hint }`.
 
-The `hs` CLI prints its own noise before your output. Loading extensions emits
-lines like:
+`pcall` around the body is what keeps a Lua runtime error from becoming a
+process-level failure with no diagnosis. A crashed tool still returns a
+structured `err` the agent can read and act on.
 
-```
--- Loading extension: window
--- Loading extension: json
-{"ok":true,"value":{"count":3}}
-```
+### Why the parser only accepts a line carrying this call's marker
 
-Naively parsing the first line, or the whole of stdout, fails. So the decoder
-splits stdout into lines, walks them from the end, and returns the first one
-that parses as JSON and has a boolean `ok` field. Anything before it is
-discarded as noise.
+The `hs` CLI prints its own noise around your output. Loading extensions emits
+`-- Loading extension: window` lines, and LuaSkin writes its own errors to
+stdout **with the offending value interpolated verbatim**. That last part makes
+stdout attacker-influenceable: a tool argument used as a table key reaches
+stdout unescaped, and an argument containing newlines can print a line that
+looks exactly like a result envelope.
 
-This also handles a tool body that logs with `print` for debugging. Its output
-scrolls past, and the real result is still the last line.
+The parser once took the last JSON-parseable line. Combined with an encode
+failure removing the real envelope, that let a crafted argument forge a result
+(#29's adjacent fix). A fixed sentinel would not help either, because the
+attacker controls the echoed text and would simply include it.
 
-If no line parses, that is a `ProtocolError`, described below.
+So every call mints an unguessable random marker (`newResultMarker`), the
+wrapper prefixes the result line with it, and the parser walks stdout from the
+end accepting only a line that starts with this call's marker. An argument
+composed before the marker existed cannot contain it. Debug `print`s from a
+tool body still scroll past harmlessly; they simply never carry the marker.
+
+If no marked line parses, that is a `ProtocolError`, described below.
 
 ## Invocation and timeouts
 
@@ -545,7 +568,9 @@ type BridgeError = {
 };
 
 type BridgeResult<TValue> =
-  | { readonly ok: true; readonly value: TValue }
+  // unencodable marks a value Lua could only hand back as its tostring form.
+  // Present-and-true or absent, never false (#37).
+  | { readonly ok: true; readonly value: TValue; readonly unencodable?: true }
   | { readonly ok: false; readonly error: BridgeError };
 ```
 
@@ -564,10 +589,11 @@ place, so improving a hint improves it everywhere.
 | `ProtocolError`   | The process exited cleanly but no line parsed as our result shape.                                              | This is a bug in the server, report it with the stderr log. The raw output is attached as `detail`.                 |
 
 `PayloadTooLarge` is a pre-flight check, not a reaction to a failure. Base64
-inflates a payload by about a third, and `execFile` passes the program as a
-single argv entry, so a large enough argument object would hit `ARG_MAX` and
-fail as an opaque spawn error. Rejecting it early turns that into a clear
-message.
+inflates a payload by about a third, the program travels as a single argv
+entry, and the size is measured in UTF-8 **bytes**, not string length -
+`String.length` counts UTF-16 code units and undercounts multibyte text up to
+3x. A large enough argument object would otherwise hit `ARG_MAX` and fail as
+an opaque `E2BIG`. Rejecting it early turns that into a clear message.
 
 Note the `detail` field. Raw subprocess output goes to logs, not into the value
 returned to the model, because that output is exactly the kind of untrusted text
@@ -695,9 +721,9 @@ defaulting to `info`). Client applications capture stderr into their own logs,
 so diagnostics are not lost, they are just kept out of the channel that cannot
 tolerate them.
 
-This also constrains the Lua side. Tool bodies `print` exactly one JSON line.
-Debug prints from a tool body are tolerated by the parser (it takes the last
-parseable line), but they are noise and should not survive review.
+This also constrains the Lua side. Tool bodies return exactly one marked JSON
+line. Debug prints from a tool body are tolerated by the parser (they never
+carry the call's marker), but they are noise and should not survive review.
 
 ## Testing strategy
 
@@ -719,8 +745,10 @@ adding a tool.
 **The end-to-end smoke test** (`test/e2e/smoke.mjs`, run with
 `npm run test:e2e`) spawns the built binary exactly as a client does and speaks
 the real MCP stdio protocol to it: `initialize`, then `tools/list`, then
-several `tools/call`. It checks that the safe tier advertises thirteen tools
-and hides `hs_eval`, that the gated tier advertises fourteen, that a schema
+several `tools/call`. It checks that the safe tier advertises its full tool
+set while hiding the gated ones (`hs_eval`, `hs_applescript`, `hs_ui_press`),
+that the `all` tier advertises everything (the exact counts are pinned in the
+test itself, currently 38 and 41), that a schema
 violation is rejected, that an injection payload comes back as inert data, and
 that nothing but protocol ever reaches stdout. Unit tests verify the modules;
 this verifies the artifact people actually install.
@@ -776,15 +804,17 @@ mistake it prevents would happen.
 
 Not committed to, not scheduled, listed so the direction is visible.
 
-- **Window layout presets.** Named multi-window arrangements applied in one
-  call, instead of the agent issuing a sequence of `hs_move_window` calls and
-  hoping about ordering.
-- **Event watchers.** Hammerspoon can watch for window, application, and screen
-  events. Surfacing those as MCP notifications would let an agent react to the
-  desktop rather than only poll it. This needs thought about lifecycle and about
-  how much a subscription can leak.
-- **MCP registry publication.** Listing the server in public MCP registries once
-  the tool surface is stable enough to promise.
+- **Event watchers on a handle registry** (#10). Hammerspoon can watch for
+  window, application, and screen events. Surfacing those as MCP notifications
+  would let an agent react to the desktop rather than only poll it. This needs
+  a registry for long-lived objects first, plus thought about lifecycle and
+  about how much a subscription can leak.
+- **A third permission tier.** Today the tiers are safe-or-all, so unlocking
+  `hs_ui_press` also unlocks `hs_eval`. A middle tier would let someone allow
+  UI automation without allowing arbitrary Lua.
+
+Done since this list was written: window layout presets (`hs_window_layout`)
+and MCP registry publication (`registry.yml`).
 
 Anything that would widen the default tier gets the same argument every time:
 what happens when an injected prompt calls it?

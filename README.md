@@ -31,7 +31,7 @@ Desktop, or your own.
 
 ## Project status
 
-Published on npm as `v0.2.x`: 38 safe-tier tools, plus 3 gated behind
+Published on npm as `v0.4.x`: 38 safe-tier tools, plus 3 gated behind
 `HS_MCP_TOOLS=all`. Still pre-1.0, so tool names and argument shapes can
 change between minor versions.
 
@@ -62,8 +62,9 @@ payload cannot close the Lua string, cannot start an escape sequence, cannot
 open a long bracket, and cannot open a comment. Injection is impossible because
 of the alphabet, not because someone remembered to escape correctly.
 
-There is no shell layer either. The server calls `execFile(hsPath, ["-c", lua])`
-with an argv array, so no `sh` ever parses the command.
+There is no shell layer either. The server talks to Hammerspoon over a
+persistent Unix socket, falling back to `spawn(hsPath, ["-c", lua])` with an
+argv array, so no `sh` ever parses the command on either path.
 
 ### 2. Tiered tools, safe by default
 
@@ -168,30 +169,32 @@ found, whether Hammerspoon is running, and whether `hs.ipc` answered.
 
 Forty-one tools: thirty-eight in the safe tier, three gated.
 
-| Tool                  | Tier   | What it does                                                                        |
-| --------------------- | ------ | ----------------------------------------------------------------------------------- |
-| `hs_health`           | safe   | Report bridge status: resolved `hs` path, whether Hammerspoon answers, its version. |
-| `hs_api_search`       | safe   | Search Hammerspoon's bundled API reference and return exact signatures.             |
-| `hs_console_tail`     | safe   | Return the last N lines of the Hammerspoon console.                                 |
-| `hs_reload_config`    | safe   | Reload `~/.hammerspoon/init.lua`.                                                   |
-| `hs_notify`           | safe   | Show a transient on-screen alert, without stealing focus.                           |
-| `hs_list_windows`     | safe   | List windows, with id, title, owning app, screen, and frame.                        |
-| `hs_focus_window`     | safe   | Focus a window by id, or by a substring of its title.                               |
-| `hs_move_window`      | safe   | Move or resize a window by id, in absolute screen pixels.                           |
-| `hs_window_layout`    | safe   | Snap a window to a named preset such as `left-half` or `quarter-top-left`.          |
-| `hs_list_apps`        | safe   | List running applications, with bundle id, PID, and window count.                   |
-| `hs_launch_app`       | safe   | Launch an application by name, or focus it if it is already running.                |
-| `hs_focus_app`        | safe   | Bring an already-running application to the front.                                  |
-| `hs_screens`          | safe   | List screens, with id, name, frame, and which one is primary.                       |
-| `hs_machine_status`   | safe   | Battery, brightness, wifi, idle time, audio, and host info in one call.             |
-| `hs_audio_devices`    | safe   | List audio output and input devices, showing the current default.                   |
-| `hs_audio_set_device` | safe   | Switch the default output or input device, for example to headphones.               |
-| `hs_audio_volume`     | safe   | Get or set volume and mute on the default device.                                   |
-| `hs_brightness`       | safe   | Get or set built-in display brightness.                                             |
-| `hs_media_control`    | safe   | Play, pause, skip, or go back, via system media keys.                               |
-| `hs_list_spaces`      | safe   | List desktops (Spaces) per screen, with positions and which is current.             |
-| `hs_goto_space`       | safe   | Switch desktop by id or by 1-based position.                                        |
-| `hs_eval`             | unsafe | Evaluate arbitrary Lua. Requires `HS_MCP_TOOLS=all`.                                |
+| Tool                  | Tier   | What it does                                                                                                                                                                                                    |
+| --------------------- | ------ | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `hs_health`           | safe   | Report bridge status: resolved `hs` path, whether Hammerspoon answers, its version.                                                                                                                             |
+| `hs_api_search`       | safe   | Search Hammerspoon's bundled API reference and return exact signatures.                                                                                                                                         |
+| `hs_console_tail`     | safe   | Return the last N lines of the Hammerspoon console.                                                                                                                                                             |
+| `hs_reload_config`    | safe   | Reload `~/.hammerspoon/init.lua`.                                                                                                                                                                               |
+| `hs_notify`           | safe   | Show a transient on-screen alert, without stealing focus.                                                                                                                                                       |
+| `hs_list_windows`     | safe   | List windows, with id, title, owning app, screen, and frame.                                                                                                                                                    |
+| `hs_focus_window`     | safe   | Focus a window by id, or by a substring of its title.                                                                                                                                                           |
+| `hs_move_window`      | safe   | Move or resize a window by id, in absolute screen pixels.                                                                                                                                                       |
+| `hs_window_layout`    | safe   | Snap a window to a named preset such as `left-half` or `quarter-top-left`.                                                                                                                                      |
+| `hs_list_apps`        | safe   | List running applications, with bundle id, PID, and window count.                                                                                                                                               |
+| `hs_launch_app`       | safe   | Launch an application by name, or focus it if it is already running.                                                                                                                                            |
+| `hs_focus_app`        | safe   | Bring an already-running application to the front.                                                                                                                                                              |
+| `hs_screens`          | safe   | List screens, with id, name, frame, and which one is primary.                                                                                                                                                   |
+| `hs_machine_status`   | safe   | Battery, brightness, wifi, idle time, audio, and host info in one call.                                                                                                                                         |
+| `hs_audio_devices`    | safe   | List audio output and input devices, showing the current default.                                                                                                                                               |
+| `hs_audio_set_device` | safe   | Switch the default output or input device, for example to headphones.                                                                                                                                           |
+| `hs_audio_volume`     | safe   | Get or set volume and mute on the default device.                                                                                                                                                               |
+| `hs_brightness`       | safe   | Get or set built-in display brightness.                                                                                                                                                                         |
+| `hs_media_control`    | safe   | Play, pause, skip, or go back, via system media keys.                                                                                                                                                           |
+| `hs_list_spaces`      | safe   | List desktops (Spaces) per screen, with positions and which is current.                                                                                                                                         |
+| `hs_goto_space`       | safe   | Switch desktop by id or by 1-based position.                                                                                                                                                                    |
+| `hs_eval`             | unsafe | Evaluate arbitrary Lua. Requires `HS_MCP_TOOLS=all`.                                                                                                                                                            |
+| `hs_applescript`      | unsafe | Run AppleScript. Reaches Mail, Notes, Reminders, Finder. Requires `HS_MCP_TOOLS=all`.                                                                                                                           |
+| `hs_ui_press`         | unsafe | Press a UI element found by `hs_ui_inspect`. Refuses to act without an `expectLabel` or `expectRole` from the inspection, and refuses when the element there no longer matches it. Requires `HS_MCP_TOOLS=all`. |
 
 `hs_window_layout` presets: `left-half`, `right-half`, `top-half`, `bottom-half`,
 `maximize`, `center`, `thirds-left`, `thirds-center`, `thirds-right`,
@@ -199,15 +202,13 @@ Forty-one tools: thirty-eight in the safe tier, three gated.
 Positions are computed from the screen's usable frame, so they respect the menu
 bar and the Dock, and they work on a second monitor whose origin is negative.
 
-| `hs_ui_press` | unsafe | Press a UI element found by `hs_ui_inspect`. Requires `HS_MCP_TOOLS=all`. |
-| `hs_applescript` | unsafe | Run AppleScript. Reaches Mail, Notes, Reminders, Finder. Requires `HS_MCP_TOOLS=all`. |
-
 `hs_ui_inspect` returns structure and labels only, never the contents of text
 fields or documents. Structure is what an agent needs in order to act; contents
 are what a password manager is made of.
 
 Tools in the `unsafe` tier are not registered at all unless you opt in. A client
-connected with default settings will not see `hs_eval` in its tool list.
+connected with default settings will not see `hs_eval`, `hs_applescript`, or
+`hs_ui_press` in its tool list.
 
 ## Configuration
 
@@ -215,16 +216,16 @@ All configuration is environment variables, read once at startup.
 
 | Variable           | Values                                 | Default             | Meaning                                                                                                                                                         |
 | ------------------ | -------------------------------------- | ------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `HS_MCP_TOOLS`     | `safe` \| `all`                        | `safe`              | Which tiers to register. `all` adds the unsafe tier, which today means `hs_eval`.                                                                               |
+| `HS_MCP_TOOLS`     | `safe` \| `all`                        | `safe`              | Which tiers to register. `all` adds the unsafe tier: `hs_eval`, `hs_applescript`, and `hs_ui_press`.                                                            |
 | `HS_MCP_TRANSPORT` | `socket` \| `spawn`                    | `socket`            | How Lua reaches Hammerspoon: a persistent Unix socket (~10x faster, self-installed on first call, falls back to spawn by itself), or one `hs` process per call. |
 | `HS_MCP_HS_PATH`   | absolute path                          | auto-detected       | Path to the `hs` binary. Set this if your install is somewhere unusual.                                                                                         |
 | `HS_MCP_DOCS_PATH` | absolute path                          | from the app bundle | Path to Hammerspoon's bundled API documentation JSON, used by `hs_api_search`.                                                                                  |
 | `HS_MCP_LOG_LEVEL` | `debug` \| `info` \| `warn` \| `error` | `info`              | Verbosity of the stderr log. Logs never touch stdout, which carries the protocol.                                                                               |
 
-An unrecognised value for `HS_MCP_TOOLS` is a startup error, not a silent
-fallback. Failing loudly is better than quietly running in a tier you did not
-expect. For the discovery order behind the `hs` path default, see
-[docs/ARCHITECTURE.md](./docs/ARCHITECTURE.md).
+An unrecognised value for `HS_MCP_TOOLS` logs a loud warning and falls back to
+`safe` - never to the wider tier. A typo can cost you the gated tools, but it
+can never grant them. For the discovery order behind the `hs` path default,
+see [docs/ARCHITECTURE.md](./docs/ARCHITECTURE.md).
 
 ## Security
 
@@ -263,8 +264,9 @@ That gap is the whole reason for tiers.
 
 ### What `HS_MCP_TOOLS=all` means
 
-It registers `hs_eval`. From that point the agent can execute any Lua it can
-write, inside a process that holds your Accessibility grants. Treat it as
+It registers `hs_eval`, `hs_applescript`, and `hs_ui_press`. From that point
+the agent can execute any Lua or AppleScript it can write, and press UI
+elements, inside a process that holds your Accessibility grants. Treat it as
 handing over a shell that also has the screen and the keyboard.
 
 It is a genuinely useful mode. Writing and debugging Hammerspoon config is much
