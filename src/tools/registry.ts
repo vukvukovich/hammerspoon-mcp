@@ -96,8 +96,9 @@ export function jsonResult(value: unknown): CallToolResult {
  * The one wire shape for "this value could not be represented, here is its
  * string form" (#35). Every tool that hits the situation renders through this,
  * so a caller learns a single vocabulary: `encodable: false`, the string form
- * in `value`, and a hint saying what to do about it. Only the hint varies,
- * because what to do depends on where the value failed to cross.
+ * in `value` (or null when no string form survived either), and a hint saying
+ * what to do about it. Only the hint varies, because what to do depends on
+ * where the value failed to cross.
  *
  * The shape stays minimal on purpose. A tool whose plain successes carry an
  * ok field passes `{ ok: true }` as extra so the field does not vanish on

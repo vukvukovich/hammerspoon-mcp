@@ -16,6 +16,11 @@ import type { ToolContext } from '../../../src/tools/registry.js';
 export type CapturedCall = { lua: string; args: unknown; options: unknown };
 export type ToolResult = { content: { type: string; text: string }[]; isError?: boolean };
 
+/** Parses the JSON payload a tool result carries in its first text block. */
+export function payloadOf<T>(result: ToolResult): T {
+  return JSON.parse(result.content[0]?.text ?? '{}') as T;
+}
+
 export const stubDocs = new DocsIndex('/nonexistent/docs.json');
 
 export function fakeBridge(result: BridgeResult<unknown>): {

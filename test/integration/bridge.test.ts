@@ -16,6 +16,7 @@ import { lua } from '../../src/bridge/lua.js';
 import { DocsIndex } from '../../src/docs/docs-index.js';
 import { ALL_TOOLS } from '../../src/tools/index.js';
 import { applyFraction, LAYOUT_PRESETS } from '../../src/tools/safe/layout.js';
+import { handlerFor, payloadOf, type ToolResult } from '../unit/tools/tool-harness.js';
 
 const bridge = new HammerspoonBridge();
 const available = bridge.hsPath !== undefined;
@@ -126,34 +127,11 @@ async function waitForResponsive(attempts = 20): Promise<void> {
  * Hammerspoon API name, which no amount of unit testing against a fake
  * subprocess can find.
  */
-/** What every tool handler resolves to, typed once so call sites need no casts (#33). */
-type ToolResult = { isError?: boolean; content: { text: string }[] };
-
-/** Parses the JSON payload a tool result carries in its first text block. */
-function payloadOf<T>(result: ToolResult): T {
-  return JSON.parse(result.content[0]?.text ?? '{}') as T;
-}
-
 describe.skipIf(!available)('tool Lua executes against real Hammerspoon', () => {
-  const runTool = async (name: string, args: Record<string, unknown> = {}): Promise<ToolResult> => {
-    const tool = ALL_TOOLS.find((candidate) => candidate.name === name);
-    expect(tool, `tool ${name} should exist`).toBeDefined();
-
-    let captured: unknown;
-    const fakeServer = {
-      registerTool: (
-        _name: string,
-        _config: unknown,
-        handler: (args: unknown, ctx: unknown) => Promise<unknown>
-      ) => {
-        captured = handler;
-      },
-    };
-    tool?.register(fakeServer as never, { bridge, docs: new DocsIndex() });
-
-    const handler = captured as (a: unknown, c: unknown) => Promise<ToolResult>;
-    return handler(args, {});
-  };
+  // The capture harness and payload extractor are the unit suite's, imported
+  // rather than re-implemented, so this file cannot drift from them (#33).
+  const runTool = async (name: string, args: Record<string, unknown> = {}): Promise<ToolResult> =>
+    handlerFor(name, { bridge, docs: new DocsIndex() })(args, {});
 
   it.each([
     ['hs_health', {}],

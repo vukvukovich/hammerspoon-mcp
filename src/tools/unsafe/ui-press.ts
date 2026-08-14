@@ -55,11 +55,13 @@ if ARGS.expectLabel == nil and ARGS.expectRole == nil then
 end
 local steps = {}
 for step in string.gmatch(ARGS.path, "[^/]+") do
-  -- Digits only: tonumber alone also accepts hex, exponent, and whitespace
-  -- forms ("0x2", "1e2", " 2 "), which would walk children the path text
-  -- does not literally name.
-  if not string.match(step, "^%d+$") then
-    error("path segment '" .. step .. "' is not a child index. Paths look like \\"/1/3/2\\".", 0)
+  -- 1-based positive integers, written canonically: tonumber alone also
+  -- accepts hex, exponent, and whitespace forms ("0x2", "1e2", " 2 "), a
+  -- leading zero ("01") aliases a child the text does not literally name,
+  -- and "0" would be misdiagnosed as a stale path when the real mistake is
+  -- 0-based indexing.
+  if not string.match(step, "^[1-9]%d*$") then
+    error("path segment '" .. step .. "' is not a child index. Indexes are 1-based; paths look like \\"/1/3/2\\".", 0)
   end
   steps[#steps + 1] = tonumber(step)
 end

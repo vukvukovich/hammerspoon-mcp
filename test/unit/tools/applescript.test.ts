@@ -6,12 +6,17 @@
  * handling lives here where it can be pinned.
  */
 
+import { readFile } from 'node:fs/promises';
+
 import { describe, expect, it } from 'vitest';
 
 import type { BridgeResult } from '../../../src/bridge/errors.js';
-import { decodeNsStringEscapes } from '../../../src/tools/unsafe/applescript.js';
+import {
+  APPLESCRIPT_FAILED_PREFIX,
+  decodeNsStringEscapes,
+} from '../../../src/tools/unsafe/applescript.js';
 
-import { fakeBridge, handlerFor, stubDocs } from './tool-harness.js';
+import { fakeBridge, handlerFor, payloadOf, stubDocs } from './tool-harness.js';
 
 function appleScriptHandler(result: BridgeResult<unknown>) {
   return handlerFor('hs_applescript', { bridge: fakeBridge(result).bridge, docs: stubDocs });
@@ -55,6 +60,20 @@ describe('decodeNsStringEscapes', () => {
   });
 });
 
+describe('the decode gate prefix', () => {
+  it('is the exact text the Lua failure branch builds messages from', async () => {
+    // The TS gate dispatches escape decoding on this prefix. It is prose
+    // coupling by necessity (the Lua error crosses as a plain string), so
+    // this pin makes rewording either side fail a test instead of silently
+    // disabling the decode.
+    const source = await readFile(
+      new URL('../../../src/tools/unsafe/applescript.ts', import.meta.url),
+      'utf8'
+    );
+    expect(source).toContain(`local message = "${APPLESCRIPT_FAILED_PREFIX}"`);
+  });
+});
+
 describe('hs_applescript result shaping', () => {
   it('reports a raw-only result with the shared unrepresentable shape (#35)', async () => {
     const handler = appleScriptHandler({
@@ -63,7 +82,7 @@ describe('hs_applescript result shaping', () => {
     });
     const result = await handler({ script: 'return current date' }, {});
     expect(result.isError).not.toBe(true);
-    const payload = JSON.parse(result.content[0]?.text ?? '{}') as Record<string, unknown>;
+    const payload = payloadOf<Record<string, unknown>>(result);
     // ok rides along on every success shape this tool emits, so a caller
     // reading payload.ok is never told a successful call was malformed.
     expect(payload['ok']).toBe(true);
@@ -76,7 +95,7 @@ describe('hs_applescript result shaping', () => {
     const handler = appleScriptHandler({ ok: true, value: { ok: true, result: 42 } });
     const result = await handler({ script: 'return 42' }, {});
     expect(result.isError).not.toBe(true);
-    expect(JSON.parse(result.content[0]?.text ?? '{}')).toEqual({ ok: true, result: 42 });
+    expect(payloadOf(result)).toEqual({ ok: true, result: 42 });
   });
 
   it('decodes NSString escapes in Lua error messages before they reach the caller', async () => {

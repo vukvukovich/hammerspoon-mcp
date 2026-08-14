@@ -48,7 +48,10 @@ export function encodeArgs(args: unknown): BridgeResult<string> {
     // past V8's string cap toString('base64') throws ERR_STRING_TOO_LONG
     // rather than returning something measurable. That escaped this function
     // as an uncaught throw even though the signature promises a BridgeResult.
-    const encodedLength = Math.ceil(json.length / 3) * 4;
+    // Measure BYTES, not string length: json.length counts UTF-16 code
+    // units, which undercounts multibyte text up to 3x and let a large CJK
+    // payload sail past the cap into the E2BIG this guard exists to prevent.
+    const encodedLength = Math.ceil(Buffer.byteLength(json, 'utf8') / 3) * 4;
     if (encodedLength > MAX_ENCODED_ARG_BYTES) {
       return { ok: false, error: payloadTooLarge(encodedLength, MAX_ENCODED_ARG_BYTES) };
     }

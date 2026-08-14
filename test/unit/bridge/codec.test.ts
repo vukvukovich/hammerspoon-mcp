@@ -70,6 +70,16 @@ describe('encodeArgs', () => {
     expect(encoded.error.kind).toBe('PayloadTooLarge');
   });
 
+  it('measures the limit in UTF-8 bytes, not string length', () => {
+    // Each CJK character is one UTF-16 code unit but three UTF-8 bytes, so a
+    // string-length estimate undercounts 3x and would wave this through into
+    // an E2BIG from the operating system.
+    const encoded = encodeArgs({ blob: '漢'.repeat(Math.ceil(MAX_ENCODED_ARG_BYTES / 3)) });
+    expect(encoded.ok).toBe(false);
+    if (encoded.ok) return;
+    expect(encoded.error.kind).toBe('PayloadTooLarge');
+  });
+
   it('accepts a large but permitted payload', () => {
     const encoded = encodeArgs({ blob: 'x'.repeat(1000) });
     expect(encoded.ok).toBe(true);

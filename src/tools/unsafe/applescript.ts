@@ -65,25 +65,32 @@ if not ok then
       -- (userdata event descriptors are skipped, their tostring is a page of
       -- hex), and bare key names when no value is scalar - the key set alone
       -- says which error family this is.
+      -- Only string keys and scalar values: a userdata key or value can
+      -- carry a throwing __tostring, and a raise here would replace the
+      -- whole diagnosis with the metamethod's error text.
       local parts = {}
       for key, value in pairs(descriptor) do
         local kind = type(value)
-        if kind == "string" or kind == "number" or kind == "boolean" then
-          parts[#parts + 1] = tostring(key) .. "=" .. tostring(value)
+        if type(key) == "string" and (kind == "string" or kind == "number" or kind == "boolean") then
+          parts[#parts + 1] = key .. "=" .. tostring(value)
         end
       end
       if #parts == 0 then
-        for key in pairs(descriptor) do parts[#parts + 1] = tostring(key) end
+        for key in pairs(descriptor) do
+          if type(key) == "string" then parts[#parts + 1] = key end
+        end
       end
       table.sort(parts)
       if #parts > 0 then
         message = message .. ": " .. table.concat(parts, "; ")
       end
     end
-  elseif descriptor ~= nil and tostring(descriptor) ~= "" then
+  elseif type(descriptor) == "string" and descriptor ~= "" then
     -- Defensive: the documented failure shape is a table, but a string
     -- descriptor is still a diagnostic worth more than a bare message.
-    message = message .. ": " .. tostring(descriptor)
+    -- Strings only - tostring on an arbitrary userdata descriptor could
+    -- raise through a __tostring metamethod and destroy the message.
+    message = message .. ": " .. descriptor
   end
   error(message, 0)
 end
@@ -96,7 +103,10 @@ local raw = type(descriptor) == "string" and descriptor or nil
 -- raw form gets the same treatment as the parsed result: it describes the
 -- same bytes that may just have refused to encode.
 local function encodable(wrapper)
-  local fine, encoded = pcall(hs.json.encode, wrapper)
+  -- Probe one level DEEPER than the wrapper itself: the codec encodes
+  -- { ok = true, value = wrapper }, so a value sitting exactly at the
+  -- encoder's recursion boundary must fail here too, not only there.
+  local fine, encoded = pcall(hs.json.encode, { p = wrapper })
   if fine and encoded ~= nil then return wrapper end
   return nil
 end
@@ -195,28 +205,31 @@ function renderAppleScriptResult(value: unknown): CallToolResult {
   return jsonResult(value);
 }
 
+/**
+ * The prefix every message from APPLESCRIPT_LUA's failure branch carries.
+ * The decode gate below dispatches on it, so the Lua text and this constant
+ * must not drift apart - a unit test pins the Lua source to it.
+ */
+export const APPLESCRIPT_FAILED_PREFIX = 'AppleScript failed';
+
 async function runAppleScript(
   args: { script: string },
   { bridge }: ToolContext
 ): Promise<CallToolResult> {
-  const result = await bridge.run(APPLESCRIPT_LUA, args, { timeoutMs: 30_000 });
+  let result = await bridge.run(APPLESCRIPT_LUA, args, { timeoutMs: 30_000 });
   // Decode NSString escapes only in messages the AppleScript failure branch
   // built (recognisable by its prefix): other Lua errors never went through
   // NSString escaping, and decoding them would corrupt genuine backslashes.
-  // The rewritten error keeps its kind, hint, and detail, and renders through
-  // fromBridge like every other tool's failure.
+  // The rewritten error keeps its kind, hint, and detail.
   if (
     !result.ok &&
     result.error.kind === 'LuaError' &&
-    result.error.message.startsWith('AppleScript failed')
+    result.error.message.startsWith(APPLESCRIPT_FAILED_PREFIX)
   ) {
-    return fromBridge(
-      {
-        ok: false,
-        error: { ...result.error, message: decodeNsStringEscapes(result.error.message) },
-      },
-      renderAppleScriptResult
-    );
+    result = {
+      ok: false,
+      error: { ...result.error, message: decodeNsStringEscapes(result.error.message) },
+    };
   }
   return fromBridge(result, renderAppleScriptResult);
 }
