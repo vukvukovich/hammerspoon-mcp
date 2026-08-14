@@ -34,7 +34,10 @@ import { payloadTooLarge, protocolError, type BridgeError, type BridgeResult } f
 export const MAX_ENCODED_ARG_BYTES = 256 * 1024;
 
 export type LuaEnvelope =
-  | { readonly ok: true; readonly value: unknown; readonly unencodable: boolean }
+  // `unencodable` is present-and-true or absent, matching BridgeResult's
+  // shape exactly, so an envelope passes through envelopeToResult unchanged.
+  // readEnvelope is the single point that normalises the wire flag (#37).
+  | { readonly ok: true; readonly value: unknown; readonly unencodable?: true }
   | { readonly ok: false; readonly err: string };
 
 export function encodeArgs(args: unknown): BridgeResult<string> {
@@ -97,6 +100,11 @@ export function newResultMarker(): string {
  * result. The previous version therefore returned nothing at all in exactly
  * the case its fallback was written to handle, which is what let a forged line
  * become the last parseable one.
+ *
+ * Only the FIRST value a body returns survives: `pcall` is bound to two
+ * results here, so a body's second and later return values are discarded.
+ * This is the documented single-value contract of hs_eval (#30); a body
+ * needing several values returns one table.
  *
  * Local names are double-underscore prefixed so they cannot collide with
  * locals declared inside a tool body.
@@ -185,11 +193,11 @@ function readEnvelope(line: string): LuaEnvelope | undefined {
   if (typeof record['ok'] !== 'boolean') return undefined;
 
   if (record['ok']) {
-    return {
-      ok: true,
-      value: record['value'],
-      unencodable: record['unencodable'] === true,
-    };
+    // Only set when true: a plain success must stay { ok, value }, which is
+    // what callers and tests compare against.
+    return record['unencodable'] === true
+      ? { ok: true, value: record['value'], unencodable: true }
+      : { ok: true, value: record['value'] };
   }
 
   return {
@@ -203,12 +211,8 @@ export function envelopeToResult(
   envelope: LuaEnvelope,
   toLuaError: (message: string) => BridgeError
 ): BridgeResult<unknown> {
-  if (envelope.ok) {
-    // Only set when true: a plain success must stay { ok, value }, which is
-    // what callers and tests compare against.
-    return envelope.unencodable
-      ? { ok: true, value: envelope.value, unencodable: true }
-      : { ok: true, value: envelope.value };
-  }
+  // The success arm is a pass-through: readEnvelope already produced the
+  // exact shape BridgeResult carries (#37).
+  if (envelope.ok) return envelope;
   return { ok: false, error: toLuaError(envelope.err) };
 }

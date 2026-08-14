@@ -110,7 +110,7 @@ describe('parseEnvelope', () => {
     const parsed = parseEnvelope(MARKER + '{"ok":true,"value":{"a":1}}', MARKER);
     expect(parsed.ok).toBe(true);
     if (!parsed.ok) return;
-    expect(parsed.value).toEqual({ ok: true, value: { a: 1 }, unencodable: false });
+    expect(parsed.value).toEqual({ ok: true, value: { a: 1 } });
   });
 
   // The hs CLI prints extension load notices before the result, and only on
@@ -124,7 +124,7 @@ describe('parseEnvelope', () => {
     const parsed = parseEnvelope(stdout, MARKER);
     expect(parsed.ok).toBe(true);
     if (!parsed.ok) return;
-    expect(parsed.value).toEqual({ ok: true, value: 'done', unencodable: false });
+    expect(parsed.value).toEqual({ ok: true, value: 'done' });
   });
 
   it('takes the last envelope when earlier output also looks like JSON', () => {
@@ -150,7 +150,7 @@ describe('parseEnvelope', () => {
     const parsed = parseEnvelope(MARKER + '{"ok":true}', MARKER);
     expect(parsed.ok).toBe(true);
     if (!parsed.ok) return;
-    expect(parsed.value).toEqual({ ok: true, value: undefined, unencodable: false });
+    expect(parsed.value).toEqual({ ok: true, value: undefined });
   });
 
   it('flags an unencodable result', () => {
@@ -256,7 +256,7 @@ describe('envelope forgery resistance', () => {
 
 describe('envelopeToResult', () => {
   it('passes a success value through', () => {
-    const result = envelopeToResult({ ok: true, value: 7, unencodable: false }, luaError);
+    const result = envelopeToResult({ ok: true, value: 7 }, luaError);
     expect(result).toEqual({ ok: true, value: 7 });
   });
 
@@ -280,7 +280,7 @@ describe('envelopeToResult', () => {
 
   it('leaves the flag off an ordinary success, so a plain result stays plain', () => {
     const result = envelopeToResult(
-      { ok: true, value: 'table: 0x600002a1c000', unencodable: false },
+      { ok: true, value: 'table: 0x600002a1c000' },
       luaError
     );
     expect(result).toEqual({ ok: true, value: 'table: 0x600002a1c000' });
